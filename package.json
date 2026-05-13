@@ -1,0 +1,20 @@
+{
+  "name": "motoplanner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Privacy-first cross-platform motorcycle route planner monorepo.",
+  "workspaces": [
+    "apps/api",
+    "apps/web",
+    "packages/shared"
+  ],
+  "scripts": {
+    "build": "npm run build -w @motoplanner/shared && npm run build -w @motoplanner/api && npm run build -w @motoplanner/web",
+    "test": "npm run test --workspaces --if-present",
+    "dev:api": "npm run dev -w @motoplanner/api",
+    "dev:web": "npm run dev -w @motoplanner/web"
+  },
+  "engines": {
+    "node": ">=25.0.0"
+  }
+}

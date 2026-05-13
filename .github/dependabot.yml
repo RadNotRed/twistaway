@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      node-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: pub
+    directory: /apps/mobile
+    schedule:
+      interval: weekly
+    groups:
+      flutter-dependencies:
+        patterns:
+          - "*"

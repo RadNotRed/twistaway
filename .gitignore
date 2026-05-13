@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+*.db
+*.sqlite
+coverage/
+.dart_tool/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+pubspec.lock
