@@ -14,12 +14,12 @@ class RoutePreference {
   final bool isToggle;
 
   RoutePreference copyWith({double? value}) => RoutePreference(
-        key: key,
-        label: label,
-        description: description,
-        value: value ?? this.value,
-        isToggle: isToggle,
-      );
+    key: key,
+    label: label,
+    description: description,
+    value: value ?? this.value,
+    isToggle: isToggle,
+  );
 }
 
 const defaultPreferences = [
@@ -39,6 +39,21 @@ const defaultPreferences = [
     key: 'avoidHighways',
     label: 'Avoid highways',
     description: 'Bias toward secondary roads.',
+    value: 1,
+    isToggle: true,
+  ),
+  RoutePreference(
+    key: 'avoidMainRoads',
+    label: 'Backroads',
+    description: 'Strongly prefer local and county roads over major arterials.',
+    value: 1,
+    isToggle: true,
+  ),
+  RoutePreference(
+    key: 'autoScenicDetour',
+    label: 'Auto scenic detour',
+    description:
+        'Allow a less direct route when scenic and backroad scores are high.',
     value: 1,
     isToggle: true,
   ),
@@ -66,7 +81,8 @@ const defaultPreferences = [
   RoutePreference(
     key: 'weatherAware',
     label: 'Weather aware',
-    description: 'Penalize rain, strong wind, poor visibility, and storm cells.',
+    description:
+        'Penalize rain, strong wind, poor visibility, and storm cells.',
     value: 1,
     isToggle: true,
   ),

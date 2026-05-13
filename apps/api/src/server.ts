@@ -34,8 +34,15 @@ interface RoutePreferences {
   twisty: number;
   scenic: number;
   avoidHighways: boolean;
+  avoidMainRoads: boolean;
+  autoScenicDetour: boolean;
   targetHighways: boolean;
   targetStraightRoads: boolean;
+}
+
+interface RoutePoint {
+  lat: number;
+  lon: number;
 }
 
 interface OsrmRoute {
@@ -129,9 +136,27 @@ function routePreferencesFromQuery(query: Request["query"]): RoutePreferences {
     twisty: numberQuery(query.twisty, 0.5),
     scenic: numberQuery(query.scenic, 0.5),
     avoidHighways,
+    avoidMainRoads: !targetHighways && boolQuery(query.avoidMainRoads),
+    autoScenicDetour: boolQuery(query.autoScenicDetour),
     targetHighways,
     targetStraightRoads: boolQuery(query.targetStraightRoads)
   };
+}
+
+function parseShapingPoints(value: unknown): RoutePoint[] {
+  if (typeof value !== "string" || value.trim() === "") {
+    return [];
+  }
+
+  return value.split(";").slice(0, 8).map((pair) => {
+    const [lat, lon] = pair.split(",").map((part) => Number(part.trim()));
+    return { lat, lon };
+  }).filter((point) =>
+    Number.isFinite(point.lat) &&
+    Number.isFinite(point.lon) &&
+    Math.abs(point.lat) <= 90 &&
+    Math.abs(point.lon) <= 180
+  );
 }
 
 function optionalNumberQuery(value: unknown): number | null {
@@ -222,17 +247,37 @@ function highwayRatio(route: OsrmRoute): number {
   return highwayDistance / total;
 }
 
+function mainRoadRatio(route: OsrmRoute): number {
+  const steps = (route.legs ?? []).flatMap((leg) => leg.steps ?? []);
+  const total = steps.reduce((sum, step) => sum + (step.distance ?? 0), 0);
+  if (total <= 0) {
+    return 0;
+  }
+
+  const mainRoadDistance = steps.reduce((sum, step) => {
+    const text = `${step.name ?? ""} ${step.ref ?? ""}`.toLowerCase();
+    const looksLikeMainRoad =
+      /\b(i-|interstate|us-|u\.s\.|highway|hwy|freeway|expressway|parkway|turnpike|state route|route|sr-|ny-|nj-|pa-|ca-|fl-)\b/.test(text) ||
+      /\b[a-z]{1,3}-\d{1,4}\b/.test(text);
+    return sum + (looksLikeMainRoad ? (step.distance ?? 0) : 0);
+  }, 0);
+  return mainRoadDistance / total;
+}
+
 function scoreRoute(route: OsrmRoute, fastestDistance: number, prefs: RoutePreferences): number {
   const distancePenalty = (route.distance - fastestDistance) / Math.max(fastestDistance, 1);
   const highway = highwayRatio(route);
+  const mainRoad = mainRoadRatio(route);
   const turns = routeTurnDensity(route);
   const curvature = routeCurvature(route);
   const straightness = 1 / Math.max(turns + curvature / 60, 0.25);
 
-  let score = -distancePenalty * 8;
+  const distanceWeight = prefs.autoScenicDetour && (prefs.scenic > 0.55 || prefs.avoidMainRoads) ? 4 : 8;
+  let score = -distancePenalty * distanceWeight;
   score += prefs.twisty * (turns * 0.8 + curvature * 0.05);
-  score += prefs.scenic * ((1 - highway) * 3 + Math.min(curvature / 80, 2));
+  score += prefs.scenic * ((1 - highway) * 2 + (1 - mainRoad) * 2 + Math.min(curvature / 80, 2));
   score += prefs.avoidHighways ? -highway * 12 : 0;
+  score += prefs.avoidMainRoads ? -mainRoad * 14 - highway * 8 : 0;
   score += prefs.targetHighways ? highway * 8 : 0;
   score += prefs.targetStraightRoads ? straightness * 2 - turns * 0.6 : 0;
   return score;
@@ -269,21 +314,27 @@ async function routeWithValhalla(
   originLng: number,
   destinationLat: number,
   destinationLng: number,
+  shapingPoints: RoutePoint[],
   preferences: RoutePreferences,
   notes: string[]
 ): Promise<OsrmResponse> {
-  const useHighways = preferences.avoidHighways
-    ? 0.02
+  const useHighways = preferences.avoidHighways || preferences.avoidMainRoads
+    ? 0.01
     : preferences.targetHighways
       ? 1
       : preferences.targetStraightRoads
         ? 0.85
         : Math.max(0.2, 0.62 - preferences.scenic * 0.3 - preferences.twisty * 0.2);
-  const useRoads = preferences.targetStraightRoads ? 0.85 : Math.max(0.2, 0.75 - preferences.twisty * 0.22);
+  const useRoads = preferences.avoidMainRoads
+    ? 0.25
+    : preferences.targetStraightRoads
+      ? 0.85
+      : Math.max(0.2, 0.75 - preferences.twisty * 0.22 - preferences.scenic * 0.08);
 
   const body = {
     locations: [
       { lat: originLat, lon: originLng },
+      ...shapingPoints.map((point) => ({ lat: point.lat, lon: point.lon, type: "via" })),
       { lat: destinationLat, lon: destinationLng }
     ],
     costing: "auto",
@@ -321,6 +372,15 @@ async function routeWithValhalla(
   notes.push(`Highway ${body.costing_options.auto.use_highways}, road ${body.costing_options.auto.use_roads}.`);
   if (preferences.avoidHighways) {
     notes.push("Avoid highways active.");
+  }
+  if (preferences.avoidMainRoads) {
+    notes.push("Backroads active: heavily reducing highways and major arterials.");
+  }
+  if (preferences.autoScenicDetour) {
+    notes.push("Auto scenic detour active: slower scenic alternatives can win.");
+  }
+  if (shapingPoints.length > 0) {
+    notes.push(`Routing through ${shapingPoints.length} rider shaping ${shapingPoints.length === 1 ? "point" : "points"}.`);
   }
   if (preferences.targetHighways) {
     notes.push("Target highways active.");
@@ -424,10 +484,16 @@ async function routeWithOsrm(
   originLng: number,
   destinationLat: number,
   destinationLng: number,
+  shapingPoints: RoutePoint[],
   preferences: RoutePreferences,
   notes: string[]
 ): Promise<OsrmResponse> {
-  const coordinates = `${originLng},${originLat};${destinationLng},${destinationLat}`;
+  const routePoints = [
+    { lat: originLat, lon: originLng },
+    ...shapingPoints,
+    { lat: destinationLat, lon: destinationLng }
+  ];
+  const coordinates = routePoints.map((point) => `${point.lon},${point.lat}`).join(";");
   const url = new URL(`https://router.project-osrm.org/route/v1/driving/${coordinates}`);
   url.searchParams.set("overview", "full");
   url.searchParams.set("geometries", "geojson");
@@ -436,6 +502,12 @@ async function routeWithOsrm(
   if (preferences.avoidHighways) {
     url.searchParams.set("exclude", "motorway");
     notes.push("Asked OSRM fallback to exclude motorway-class roads.");
+  }
+  if (preferences.avoidMainRoads) {
+    notes.push("OSRM fallback cannot forbid all main roads, so alternatives are scored against major-road names.");
+  }
+  if (shapingPoints.length > 0) {
+    notes.push(`OSRM fallback routing through ${shapingPoints.length} rider shaping ${shapingPoints.length === 1 ? "point" : "points"}.`);
   }
 
   let upstream = await fetch(url, {
@@ -642,13 +714,14 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       const preferences = routePreferencesFromQuery(req.query);
+      const shapingPoints = parseShapingPoints(req.query.shapingPoints);
       const plannerNotes: string[] = [];
       let selected: OsrmResponse;
       try {
-        selected = await routeWithValhalla(originLat, originLng, destinationLat, destinationLng, preferences, plannerNotes);
+        selected = await routeWithValhalla(originLat, originLng, destinationLat, destinationLng, shapingPoints, preferences, plannerNotes);
       } catch (error) {
         plannerNotes.push(`Valhalla preference routing unavailable: ${error instanceof Error ? error.message : "unknown error"}.`);
-        selected = await routeWithOsrm(originLat, originLng, destinationLat, destinationLng, preferences, plannerNotes);
+        selected = await routeWithOsrm(originLat, originLng, destinationLat, destinationLng, shapingPoints, preferences, plannerNotes);
       }
 
       res.json({

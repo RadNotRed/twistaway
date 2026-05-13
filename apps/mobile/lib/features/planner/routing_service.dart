@@ -38,8 +38,8 @@ class RoutingService {
       'MOTOPLANNER_API_BASE_URL',
       defaultValue: 'http://localhost:4180',
     ),
-  })  : _client = client ?? http.Client(),
-        _apiBaseUrl = apiBaseUrl;
+  }) : _client = client ?? http.Client(),
+       _apiBaseUrl = apiBaseUrl;
 
   final http.Client _client;
   final String _apiBaseUrl;
@@ -47,6 +47,7 @@ class RoutingService {
   Future<PlannedRoute> route({
     required LatLng origin,
     required LatLng destination,
+    List<LatLng> shapingPoints = const [],
     required Map<String, double> preferences,
   }) async {
     final uri = Uri.parse('$_apiBaseUrl/integrations/route').replace(
@@ -55,7 +56,15 @@ class RoutingService {
         'originLng': origin.longitude.toString(),
         'destinationLat': destination.latitude.toString(),
         'destinationLng': destination.longitude.toString(),
-        for (final entry in preferences.entries) entry.key: entry.value.toString(),
+        if (shapingPoints.isNotEmpty)
+          'shapingPoints': shapingPoints
+              .map(
+                (point) =>
+                    '${point.latitude.toStringAsFixed(6)},${point.longitude.toStringAsFixed(6)}',
+              )
+              .join(';'),
+        for (final entry in preferences.entries)
+          entry.key: entry.value.toString(),
       },
     );
 
@@ -81,26 +90,34 @@ class RoutingService {
   }
 
   PlannedRoute _plannedRouteFromOsrm(Map<String, dynamic> decoded) {
-    final route = (decoded['routes'] as List<dynamic>).first as Map<String, dynamic>;
+    final route =
+        (decoded['routes'] as List<dynamic>).first as Map<String, dynamic>;
     final geometry = route['geometry'] as Map<String, dynamic>;
     final coordinatesList = geometry['coordinates'] as List<dynamic>;
-    final points = coordinatesList.map((coordinate) {
-      final pair = coordinate as List<dynamic>;
-      return LatLng((pair[1] as num).toDouble(), (pair[0] as num).toDouble());
-    }).toList(growable: false);
+    final points = coordinatesList
+        .map((coordinate) {
+          final pair = coordinate as List<dynamic>;
+          return LatLng(
+            (pair[1] as num).toDouble(),
+            (pair[0] as num).toDouble(),
+          );
+        })
+        .toList(growable: false);
 
     final legs = route['legs'] as List<dynamic>;
-    final steps = legs.expand((leg) {
-      final legMap = leg as Map<String, dynamic>;
-      return (legMap['steps'] as List<dynamic>).map((stepValue) {
-        final step = stepValue as Map<String, dynamic>;
-        return RouteStep(
-          instruction: _instructionFor(step),
-          distanceMeters: (step['distance'] as num).toDouble(),
-          durationSeconds: (step['duration'] as num).toDouble(),
-        );
-      });
-    }).toList(growable: false);
+    final steps = legs
+        .expand((leg) {
+          final legMap = leg as Map<String, dynamic>;
+          return (legMap['steps'] as List<dynamic>).map((stepValue) {
+            final step = stepValue as Map<String, dynamic>;
+            return RouteStep(
+              instruction: _instructionFor(step),
+              distanceMeters: (step['distance'] as num).toDouble(),
+              durationSeconds: (step['duration'] as num).toDouble(),
+            );
+          });
+        })
+        .toList(growable: false);
 
     return PlannedRoute(
       points: points,
@@ -115,22 +132,21 @@ class RoutingService {
     required LatLng origin,
     required LatLng destination,
   }) async {
-    final coordinates = '${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}';
-    final uri = Uri.https(
-      'router.project-osrm.org',
-      '/route/v1/driving/$coordinates',
-      {
-        'overview': 'full',
-        'geometries': 'geojson',
-        'steps': 'true',
-        'alternatives': 'false',
-      },
-    );
+    final coordinates =
+        '${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}';
+    final uri =
+        Uri.https('router.project-osrm.org', '/route/v1/driving/$coordinates', {
+          'overview': 'full',
+          'geometries': 'geojson',
+          'steps': 'true',
+          'alternatives': 'false',
+        });
 
     final response = await _client.get(
       uri,
       headers: const {
-        'User-Agent': 'MotoPlanner/0.1 (development contact: motoplanner.local)',
+        'User-Agent':
+            'MotoPlanner/0.1 (development contact: motoplanner.local)',
       },
     );
 
@@ -165,7 +181,10 @@ class RoutingService {
     }
 
     final maneuver = step['maneuver'] as Map<String, dynamic>;
-    final type = (maneuver['type'] as String? ?? 'continue').replaceAll('_', ' ');
+    final type = (maneuver['type'] as String? ?? 'continue').replaceAll(
+      '_',
+      ' ',
+    );
     final modifier = maneuver['modifier'] as String?;
     final roadName = step['name'] as String? ?? '';
 

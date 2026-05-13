@@ -32,8 +32,10 @@ class _MotoPlannerAppState extends State<MotoPlannerApp> {
 
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
-        final lightScheme = lightDynamic ?? ColorScheme.fromSeed(seedColor: fallbackSeed);
-        final darkScheme = darkDynamic ??
+        final lightScheme =
+            lightDynamic ?? ColorScheme.fromSeed(seedColor: fallbackSeed);
+        final darkScheme =
+            darkDynamic ??
             ColorScheme.fromSeed(
               seedColor: fallbackSeed,
               brightness: Brightness.dark,
@@ -43,14 +45,8 @@ class _MotoPlannerAppState extends State<MotoPlannerApp> {
           debugShowCheckedModeBanner: false,
           title: 'MotoPlanner',
           themeMode: _themeMode,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: lightScheme,
-          ),
-          darkTheme: ThemeData(
-            useMaterial3: true,
-            colorScheme: darkScheme,
-          ),
+          theme: ThemeData(useMaterial3: true, colorScheme: lightScheme),
+          darkTheme: ThemeData(useMaterial3: true, colorScheme: darkScheme),
           home: PlannerHome(
             themeMode: _themeMode,
             onThemeModeChanged: (mode) => setState(() => _themeMode = mode),
@@ -115,6 +111,7 @@ class _PlannerHomeState extends State<PlannerHome> {
   MapStyle _mapStyle = MapStyle.roads;
   PlaceResult? _origin;
   PlaceResult? _destination;
+  final List<PlaceResult> _shapingPoints = [];
   PlannedRoute? _route;
   Position? _currentPosition;
   double? _distanceToNextStepMeters;
@@ -129,7 +126,9 @@ class _PlannerHomeState extends State<PlannerHome> {
   void initState() {
     super.initState();
     _originController.addListener(() => _onQueryChanged(SearchTarget.origin));
-    _destinationController.addListener(() => _onQueryChanged(SearchTarget.destination));
+    _destinationController.addListener(
+      () => _onQueryChanged(SearchTarget.destination),
+    );
     unawaited(_centerOnCurrentLocation(setAsOrigin: true, quiet: true));
   }
 
@@ -199,11 +198,7 @@ class _PlannerHomeState extends State<PlannerHome> {
       drawer: wide ? null : Drawer(child: SafeArea(child: _buildPreferences())),
       body: Row(
         children: [
-          if (wide)
-            SizedBox(
-              width: 390,
-              child: _buildPreferences(),
-            ),
+          if (wide) SizedBox(width: 390, child: _buildPreferences()),
           Expanded(
             child: Stack(
               children: [
@@ -211,6 +206,7 @@ class _PlannerHomeState extends State<PlannerHome> {
                   controller: _mapController,
                   origin: _origin,
                   destination: _destination,
+                  shapingPoints: _shapingPoints,
                   route: _route,
                   mapStyle: _mapStyle,
                   currentPosition: _currentPosition,
@@ -229,8 +225,10 @@ class _PlannerHomeState extends State<PlannerHome> {
                     results: _searchResults,
                     searchTarget: _searchTarget,
                     onSearch: (target) => _search(target, selectFirst: true),
-                    onQueryChanged: (target) => setState(() => _searchTarget = target),
-                    onTargetChanged: (target) => setState(() => _searchTarget = target),
+                    onQueryChanged: (target) =>
+                        setState(() => _searchTarget = target),
+                    onTargetChanged: (target) =>
+                        setState(() => _searchTarget = target),
                     onResultSelected: _selectPlace,
                     onSwap: _swapRouteEnds,
                     onClear: _clearRoute,
@@ -254,16 +252,24 @@ class _PlannerHomeState extends State<PlannerHome> {
                     children: [
                       FloatingActionButton.small(
                         heroTag: 'follow',
-                        tooltip: _followNavigation ? 'Following location' : 'Follow location',
+                        tooltip: _followNavigation
+                            ? 'Following location'
+                            : 'Follow location',
                         onPressed: _currentPosition == null
                             ? null
                             : () {
-                                setState(() => _followNavigation = !_followNavigation);
+                                setState(
+                                  () => _followNavigation = !_followNavigation,
+                                );
                                 if (_followNavigation) {
                                   _moveToPosition(_currentPosition!);
                                 }
                               },
-                        child: Icon(_followNavigation ? Icons.explore : Icons.explore_outlined),
+                        child: Icon(
+                          _followNavigation
+                              ? Icons.explore
+                              : Icons.explore_outlined,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       FloatingActionButton.small(
@@ -279,7 +285,9 @@ class _PlannerHomeState extends State<PlannerHome> {
                                 }
                               }
                             : null,
-                        child: Icon(_headingUp ? Icons.navigation : Icons.north),
+                        child: Icon(
+                          _headingUp ? Icons.navigation : Icons.north,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       FloatingActionButton.small(
@@ -311,6 +319,7 @@ class _PlannerHomeState extends State<PlannerHome> {
                   child: _RouteSheet(
                     origin: _origin,
                     destination: _destination,
+                    shapingPoints: _shapingPoints,
                     route: _route,
                     routingBusy: _routingBusy,
                     navigating: _navigating,
@@ -319,6 +328,12 @@ class _PlannerHomeState extends State<PlannerHome> {
                     distanceToDestinationMeters: _distanceToDestinationMeters,
                     navigationAlert: _navigationAlert,
                     onPlanRide: _planRoute,
+                    onUndoShapingPoint: _shapingPoints.isEmpty
+                        ? null
+                        : _undoLastShapingPoint,
+                    onClearShapingPoints: _shapingPoints.isEmpty
+                        ? null
+                        : _clearShapingPoints,
                     onStartNavigation: _startNavigation,
                     onStopNavigation: _stopNavigation,
                     onSpeak: _speakNextDirection,
@@ -345,7 +360,9 @@ class _PlannerHomeState extends State<PlannerHome> {
       return;
     }
 
-    final query = target == SearchTarget.origin ? _originController.text : _destinationController.text;
+    final query = target == SearchTarget.origin
+        ? _originController.text
+        : _destinationController.text;
     setState(() {
       _searchTarget = target;
       _message = null;
@@ -391,7 +408,10 @@ class _PlannerHomeState extends State<PlannerHome> {
     });
 
     try {
-      final results = await _placeSearch.search(query, context: _searchContext(target));
+      final results = await _placeSearch.search(
+        query,
+        context: _searchContext(target),
+      );
       if (!mounted || sequence != _searchSequence) {
         return;
       }
@@ -402,11 +422,15 @@ class _PlannerHomeState extends State<PlannerHome> {
       setState(() {
         _searchResults = results;
         if (results.isEmpty) {
-          _message = 'No places found. Try a city, road, landmark, or full address.';
+          _message =
+              'No places found. Try a city, road, landmark, or full address.';
         }
       });
       if (previewFirst && results.isNotEmpty) {
-        _mapController.move(results.first.latLng, math.max(_mapController.camera.zoom, 11));
+        _mapController.move(
+          results.first.latLng,
+          math.max(_mapController.camera.zoom, 11),
+        );
       }
     } catch (error) {
       if (mounted && sequence == _searchSequence) {
@@ -419,7 +443,10 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
   }
 
-  Future<void> _selectPlace(PlaceResult result, {SearchTarget? targetOverride}) async {
+  Future<void> _selectPlace(
+    PlaceResult result, {
+    SearchTarget? targetOverride,
+  }) async {
     final target = targetOverride ?? _searchTarget;
     setState(() {
       _programmaticTextEdit = true;
@@ -431,6 +458,7 @@ class _PlannerHomeState extends State<PlannerHome> {
         _destination = result;
         _destinationController.text = _shortName(result.name);
       }
+      _shapingPoints.clear();
       _programmaticTextEdit = false;
       _searchResults = const [];
       _message = null;
@@ -442,7 +470,8 @@ class _PlannerHomeState extends State<PlannerHome> {
 
   Future<void> _dropPin(LatLng point) async {
     final place = PlaceResult(
-      name: 'Dropped pin ${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)}',
+      name:
+          'Dropped pin ${point.latitude.toStringAsFixed(4)}, ${point.longitude.toStringAsFixed(4)}',
       latLng: point,
       type: 'map tap',
     );
@@ -452,9 +481,18 @@ class _PlannerHomeState extends State<PlannerHome> {
         _origin = place;
         _originController.text = 'Dropped start';
         _searchTarget = SearchTarget.destination;
-      } else {
+        _shapingPoints.clear();
+      } else if (_destination == null) {
         _destination = place;
         _destinationController.text = 'Dropped destination';
+      } else {
+        _shapingPoints.add(
+          PlaceResult(
+            name: 'Scenic shaping point ${_shapingPoints.length + 1}',
+            latLng: point,
+            type: 'route shaping',
+          ),
+        );
       }
       _message = null;
     });
@@ -479,7 +517,10 @@ class _PlannerHomeState extends State<PlannerHome> {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (!quiet) {
-          setState(() => _message = 'Turn on location services, then try current location again.');
+          setState(
+            () => _message =
+                'Turn on location services, then try current location again.',
+          );
         }
         return false;
       }
@@ -488,9 +529,13 @@ class _PlannerHomeState extends State<PlannerHome> {
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
       }
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         if (!quiet) {
-          setState(() => _message = 'Location permission is needed to use current location.');
+          setState(
+            () => _message =
+                'Location permission is needed to use current location.',
+          );
         }
         return false;
       }
@@ -547,6 +592,7 @@ class _PlannerHomeState extends State<PlannerHome> {
         _originController.text = place.name;
         _programmaticTextEdit = false;
         _searchTarget = SearchTarget.destination;
+        _shapingPoints.clear();
       }
       _message = null;
     });
@@ -564,7 +610,9 @@ class _PlannerHomeState extends State<PlannerHome> {
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      setState(() => _message = 'Turn on location services to start navigation.');
+      setState(
+        () => _message = 'Turn on location services to start navigation.',
+      );
       return;
     }
 
@@ -572,8 +620,11 @@ class _PlannerHomeState extends State<PlannerHome> {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-      setState(() => _message = 'Location permission is needed to start navigation.');
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      setState(
+        () => _message = 'Location permission is needed to start navigation.',
+      );
       return;
     }
 
@@ -594,14 +645,15 @@ class _PlannerHomeState extends State<PlannerHome> {
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 5,
     );
-    _positionSubscription = Geolocator.getPositionStream(locationSettings: settings).listen(
-      _onNavigationPosition,
-      onError: (Object error) {
-        if (mounted) {
-          setState(() => _message = 'Navigation location failed: $error');
-        }
-      },
-    );
+    _positionSubscription =
+        Geolocator.getPositionStream(locationSettings: settings).listen(
+          _onNavigationPosition,
+          onError: (Object error) {
+            if (mounted) {
+              setState(() => _message = 'Navigation location failed: $error');
+            }
+          },
+        );
 
     final lastKnown = await _safeLastKnownPosition();
     if (lastKnown != null) {
@@ -627,11 +679,22 @@ class _PlannerHomeState extends State<PlannerHome> {
 
     final current = LatLng(position.latitude, position.longitude);
     final progress = _routeProgress(route, current);
-    final stepIndex = _stepIndexForDistance(route, progress.distanceAlongRouteMeters);
-    final nextDistance = _distanceToStepEnd(route, stepIndex, progress.distanceAlongRouteMeters);
-    final destinationDistance = math.max(0, route.distanceMeters - progress.distanceAlongRouteMeters).toDouble();
+    final stepIndex = _stepIndexForDistance(
+      route,
+      progress.distanceAlongRouteMeters,
+    );
+    final nextDistance = _distanceToStepEnd(
+      route,
+      stepIndex,
+      progress.distanceAlongRouteMeters,
+    );
+    final destinationDistance = math
+        .max(0, route.distanceMeters - progress.distanceAlongRouteMeters)
+        .toDouble();
     final offRoute = progress.distanceFromRouteMeters;
-    final arrived = destinationDistance < 40 || _distance.as(LengthUnit.Meter, current, route.points.last) < 40;
+    final arrived =
+        destinationDistance < 40 ||
+        _distance.as(LengthUnit.Meter, current, route.points.last) < 40;
 
     String? alert;
     if (arrived) {
@@ -639,7 +702,8 @@ class _PlannerHomeState extends State<PlannerHome> {
     } else if (offRoute > 70) {
       alert = 'Off route by ${_formatDistance(offRoute)}';
     } else if (nextDistance < 120 && stepIndex < route.steps.length) {
-      alert = '${_formatDistance(nextDistance)}: ${route.steps[stepIndex].instruction}';
+      alert =
+          '${_formatDistance(nextDistance)}: ${route.steps[stepIndex].instruction}';
     }
 
     setState(() {
@@ -670,16 +734,28 @@ class _PlannerHomeState extends State<PlannerHome> {
       _offRouteAlerted = false;
     }
 
-    if (stepIndex != _lastSpokenStepIndex && nextDistance < 180 && stepIndex < route.steps.length) {
+    if (stepIndex != _lastSpokenStepIndex &&
+        nextDistance < 180 &&
+        stepIndex < route.steps.length) {
       _lastSpokenStepIndex = stepIndex;
-      unawaited(_tts.speak('${route.steps[stepIndex].instruction}. ${_formatDistance(nextDistance)}.'));
+      unawaited(
+        _tts.speak(
+          '${route.steps[stepIndex].instruction}. ${_formatDistance(nextDistance)}.',
+        ),
+      );
     }
   }
 
   void _moveToPosition(Position position) {
     final point = LatLng(position.latitude, position.longitude);
-    _mapController.move(point, math.max(_mapController.camera.zoom, _navigating ? 17 : 14));
-    if (_navigating && _headingUp && position.heading.isFinite && position.heading >= 0) {
+    _mapController.move(
+      point,
+      math.max(_mapController.camera.zoom, _navigating ? 17 : 14),
+    );
+    if (_navigating &&
+        _headingUp &&
+        position.heading.isFinite &&
+        position.heading >= 0) {
       _mapController.rotate(position.heading);
     }
   }
@@ -694,7 +770,10 @@ class _PlannerHomeState extends State<PlannerHome> {
     final origin = _origin;
     final destination = _destination;
     if (origin == null && destination != null) {
-      setState(() => _message = 'Requesting location permission for your start point...');
+      setState(
+        () =>
+            _message = 'Requesting location permission for your start point...',
+      );
       final located = await _setCurrentLocationAsStart();
       if (!located) {
         return;
@@ -716,12 +795,17 @@ class _PlannerHomeState extends State<PlannerHome> {
       final route = await _routing.route(
         origin: origin.latLng,
         destination: destination.latLng,
+        shapingPoints: _shapingPoints
+            .map((point) => point.latLng)
+            .toList(growable: false),
         preferences: _preferenceMap(),
       );
       setState(() {
         _route = route;
         _navStepIndex = 0;
-        _distanceToNextStepMeters = route.steps.isEmpty ? null : route.steps.first.distanceMeters;
+        _distanceToNextStepMeters = route.steps.isEmpty
+            ? null
+            : route.steps.first.distanceMeters;
         _distanceToDestinationMeters = route.distanceMeters;
         _navigationAlert = null;
       });
@@ -759,9 +843,17 @@ class _PlannerHomeState extends State<PlannerHome> {
       final oldOrigin = _origin;
       _origin = _destination;
       _destination = oldOrigin;
+      final reversedShapingPoints = _shapingPoints.reversed.toList(
+        growable: false,
+      );
+      _shapingPoints
+        ..clear()
+        ..addAll(reversedShapingPoints);
       _programmaticTextEdit = true;
       _originController.text = _origin == null ? '' : _shortName(_origin!.name);
-      _destinationController.text = _destination == null ? '' : _shortName(_destination!.name);
+      _destinationController.text = _destination == null
+          ? ''
+          : _shortName(_destination!.name);
       _programmaticTextEdit = false;
     });
     unawaited(_planRouteIfReady());
@@ -772,6 +864,7 @@ class _PlannerHomeState extends State<PlannerHome> {
     setState(() {
       _origin = null;
       _destination = null;
+      _shapingPoints.clear();
       _route = null;
       _searchResults = const [];
       _programmaticTextEdit = true;
@@ -780,6 +873,28 @@ class _PlannerHomeState extends State<PlannerHome> {
       _programmaticTextEdit = false;
       _message = null;
     });
+  }
+
+  void _undoLastShapingPoint() {
+    if (_shapingPoints.isEmpty) {
+      return;
+    }
+    setState(() {
+      _shapingPoints.removeLast();
+      _message = null;
+    });
+    unawaited(_planRouteIfReady());
+  }
+
+  void _clearShapingPoints() {
+    if (_shapingPoints.isEmpty) {
+      return;
+    }
+    setState(() {
+      _shapingPoints.clear();
+      _message = null;
+    });
+    unawaited(_planRouteIfReady());
   }
 
   Future<void> _speakNextDirection() async {
@@ -798,15 +913,21 @@ class _PlannerHomeState extends State<PlannerHome> {
     if (route == null || route.steps.isEmpty) {
       return 'Navigation started.';
     }
-    return route.steps[math.min(_navStepIndex, route.steps.length - 1)].instruction;
+    return route
+        .steps[math.min(_navStepIndex, route.steps.length - 1)]
+        .instruction;
   }
 
   void _updatePreference(String key, double value) {
     setState(() {
       void setPreference(String targetKey, double targetValue) {
-        final index = _preferences.indexWhere((preference) => preference.key == targetKey);
+        final index = _preferences.indexWhere(
+          (preference) => preference.key == targetKey,
+        );
         if (index >= 0) {
-          _preferences[index] = _preferences[index].copyWith(value: targetValue);
+          _preferences[index] = _preferences[index].copyWith(
+            value: targetValue,
+          );
         }
       }
 
@@ -814,15 +935,19 @@ class _PlannerHomeState extends State<PlannerHome> {
       if (key == 'avoidHighways' && value >= 0.5) {
         setPreference('targetHighways', 0);
       }
+      if (key == 'avoidMainRoads' && value >= 0.5) {
+        setPreference('targetHighways', 0);
+      }
       if (key == 'targetHighways' && value >= 0.5) {
         setPreference('avoidHighways', 0);
+        setPreference('avoidMainRoads', 0);
       }
     });
   }
 
   Map<String, double> _preferenceMap() => {
-        for (final preference in _preferences) preference.key: preference.value,
-      };
+    for (final preference in _preferences) preference.key: preference.value,
+  };
 
   SearchContext _searchContext(SearchTarget target) {
     final bounds = _mapController.camera.visibleBounds;
@@ -854,7 +979,11 @@ class _PlannerHomeState extends State<PlannerHome> {
       final end = route.points[index + 1];
       final segmentLength = _distance.as(LengthUnit.Meter, start, end);
       final projection = _projectToSegment(current, start, end);
-      final offRoute = _distance.as(LengthUnit.Meter, current, projection.point);
+      final offRoute = _distance.as(
+        LengthUnit.Meter,
+        current,
+        projection.point,
+      );
       if (offRoute < bestDistance) {
         bestDistance = offRoute;
         distanceBeforeBest = distanceAlong + segmentLength * projection.t;
@@ -863,13 +992,18 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
 
     return _RouteProgress(
-      distanceAlongRouteMeters: math.min(distanceBeforeBest, route.distanceMeters),
+      distanceAlongRouteMeters: math.min(
+        distanceBeforeBest,
+        route.distanceMeters,
+      ),
       distanceFromRouteMeters: bestDistance,
     );
   }
 
   _SegmentProjection _projectToSegment(LatLng point, LatLng start, LatLng end) {
-    final latScale = math.cos(degreesToRadians((start.latitude + end.latitude) / 2));
+    final latScale = math.cos(
+      degreesToRadians((start.latitude + end.latitude) / 2),
+    );
     final px = point.longitude * latScale;
     final py = point.latitude;
     final sx = start.longitude * latScale;
@@ -879,7 +1013,9 @@ class _PlannerHomeState extends State<PlannerHome> {
     final dx = ex - sx;
     final dy = ey - sy;
     final lengthSquared = dx * dx + dy * dy;
-    final t = lengthSquared == 0 ? 0.0 : (((px - sx) * dx + (py - sy) * dy) / lengthSquared).clamp(0.0, 1.0);
+    final t = lengthSquared == 0
+        ? 0.0
+        : (((px - sx) * dx + (py - sy) * dy) / lengthSquared).clamp(0.0, 1.0);
 
     return _SegmentProjection(
       point: LatLng(
@@ -890,7 +1026,10 @@ class _PlannerHomeState extends State<PlannerHome> {
     );
   }
 
-  int _stepIndexForDistance(PlannedRoute route, double distanceAlongRouteMeters) {
+  int _stepIndexForDistance(
+    PlannedRoute route,
+    double distanceAlongRouteMeters,
+  ) {
     var cumulative = 0.0;
     for (var index = 0; index < route.steps.length; index += 1) {
       cumulative += route.steps[index].distanceMeters;
@@ -901,7 +1040,11 @@ class _PlannerHomeState extends State<PlannerHome> {
     return math.max(0, route.steps.length - 1);
   }
 
-  double _distanceToStepEnd(PlannedRoute route, int stepIndex, double distanceAlongRouteMeters) {
+  double _distanceToStepEnd(
+    PlannedRoute route,
+    int stepIndex,
+    double distanceAlongRouteMeters,
+  ) {
     final stepEnd = route.steps
         .take(stepIndex + 1)
         .fold<double>(0, (sum, step) => sum + step.distanceMeters);
@@ -920,10 +1063,7 @@ class _RouteProgress {
 }
 
 class _SegmentProjection {
-  const _SegmentProjection({
-    required this.point,
-    required this.t,
-  });
+  const _SegmentProjection({required this.point, required this.t});
 
   final LatLng point;
   final double t;
@@ -934,6 +1074,7 @@ class _PlannerMap extends StatelessWidget {
     required this.controller,
     required this.origin,
     required this.destination,
+    required this.shapingPoints,
     required this.route,
     required this.mapStyle,
     required this.currentPosition,
@@ -942,11 +1083,14 @@ class _PlannerMap extends StatelessWidget {
     required this.onTap,
   });
 
-  static const _trafficTileTemplate = String.fromEnvironment('MOTOPLANNER_TRAFFIC_TILE_TEMPLATE');
+  static const _trafficTileTemplate = String.fromEnvironment(
+    'MOTOPLANNER_TRAFFIC_TILE_TEMPLATE',
+  );
 
   final MapController controller;
   final PlaceResult? origin;
   final PlaceResult? destination;
+  final List<PlaceResult> shapingPoints;
   final PlannedRoute? route;
   final MapStyle mapStyle;
   final Position? currentPosition;
@@ -973,7 +1117,9 @@ class _PlannerMap extends StatelessWidget {
         TileLayer(
           urlTemplate: _baseTileTemplate,
           userAgentPackageName: 'com.motoplanner.mobile',
-          tileBuilder: darkMap && mapStyle != MapStyle.satellite ? darkModeTileBuilder : null,
+          tileBuilder: darkMap && mapStyle != MapStyle.satellite
+              ? darkModeTileBuilder
+              : null,
         ),
         if (mapStyle == MapStyle.traffic && trafficConfigured)
           TileLayer(
@@ -998,18 +1144,25 @@ class _PlannerMap extends StatelessWidget {
                 ],
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.traffic_outlined, size: 18, color: scheme.primary),
+                    Icon(
+                      Icons.traffic_outlined,
+                      size: 18,
+                      color: scheme.primary,
+                    ),
                     const SizedBox(width: 8),
                     const Text('Traffic provider not configured'),
                   ],
                 ),
               ),
             ),
-        ),
+          ),
         if (route != null)
           PolylineLayer(
             polylines: [
@@ -1029,24 +1182,31 @@ class _PlannerMap extends StatelessWidget {
                 point: origin!.latLng,
                 width: 46,
                 height: 46,
-                child: _MapPin(
-                  label: 'A',
-                  color: scheme.primary,
-                ),
+                child: _MapPin(label: 'A', color: scheme.primary),
               ),
             if (destination != null)
               Marker(
                 point: destination!.latLng,
                 width: 46,
                 height: 46,
+                child: _MapPin(label: 'B', color: scheme.tertiary),
+              ),
+            for (final indexed in shapingPoints.indexed)
+              Marker(
+                point: indexed.$2.latLng,
+                width: 38,
+                height: 38,
                 child: _MapPin(
-                  label: 'B',
-                  color: scheme.tertiary,
+                  label: '${indexed.$1 + 1}',
+                  color: scheme.secondary,
                 ),
               ),
             if (currentPosition != null)
               Marker(
-                point: LatLng(currentPosition!.latitude, currentPosition!.longitude),
+                point: LatLng(
+                  currentPosition!.latitude,
+                  currentPosition!.longitude,
+                ),
                 width: 52,
                 height: 52,
                 child: _CurrentLocationMarker(
@@ -1077,8 +1237,10 @@ class _PlannerMap extends StatelessWidget {
 
   String get _baseTileTemplate {
     return switch (mapStyle) {
-      MapStyle.satellite => 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      MapStyle.roads || MapStyle.traffic => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      MapStyle.satellite =>
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      MapStyle.roads ||
+      MapStyle.traffic => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     };
   }
 
@@ -1086,7 +1248,10 @@ class _PlannerMap extends StatelessWidget {
     return switch (mapStyle) {
       MapStyle.satellite => 'Tiles © Esri',
       MapStyle.roads => '© OpenStreetMap contributors',
-      MapStyle.traffic => _trafficTileTemplate.isEmpty ? '© OpenStreetMap contributors' : '© OpenStreetMap contributors · traffic provider',
+      MapStyle.traffic =>
+        _trafficTileTemplate.isEmpty
+            ? '© OpenStreetMap contributors'
+            : '© OpenStreetMap contributors · traffic provider',
     };
   }
 }
@@ -1154,7 +1319,11 @@ class _SearchCard extends StatelessWidget {
                     return ListTile(
                       dense: true,
                       leading: const Icon(Icons.location_on_outlined),
-                      title: Text(result.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+                      title: Text(
+                        result.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                       subtitle: Text(
                         result.distanceMeters == null
                             ? '${result.latLng.latitude.toStringAsFixed(4)}, ${result.latLng.longitude.toStringAsFixed(4)}'
@@ -1276,7 +1445,9 @@ class _SearchField extends StatelessWidget {
         prefixIcon: Icon(icon),
         labelText: label,
         filled: true,
-        fillColor: selected ? scheme.primaryContainer.withValues(alpha: 0.38) : null,
+        fillColor: selected
+            ? scheme.primaryContainer.withValues(alpha: 0.38)
+            : null,
         border: const OutlineInputBorder(),
       ),
     );
@@ -1301,7 +1472,9 @@ class _PreferencePanel extends StatelessWidget {
       children: [
         Text('Ride profile', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 6),
-        const Text('Tune the ride, then replan. Provider-specific routing weights will get deeper as the routing engine is swapped in.'),
+        const Text(
+          'Tune the ride, then replan. Provider-specific routing weights will get deeper as the routing engine is swapped in.',
+        ),
         const SizedBox(height: 14),
         FilledButton.icon(
           onPressed: onReplan,
@@ -1319,11 +1492,17 @@ class _PreferencePanel extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Expanded(child: Text(preference.label, style: Theme.of(context).textTheme.titleMedium)),
+                      Expanded(
+                        child: Text(
+                          preference.label,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ),
                       if (preference.isToggle)
                         Switch(
                           value: preference.value >= 0.5,
-                          onChanged: (value) => onChanged(preference.key, value ? 1 : 0),
+                          onChanged: (value) =>
+                              onChanged(preference.key, value ? 1 : 0),
                         ),
                     ],
                   ),
@@ -1346,6 +1525,7 @@ class _RouteSheet extends StatelessWidget {
   const _RouteSheet({
     required this.origin,
     required this.destination,
+    required this.shapingPoints,
     required this.route,
     required this.routingBusy,
     required this.navigating,
@@ -1354,6 +1534,8 @@ class _RouteSheet extends StatelessWidget {
     required this.distanceToDestinationMeters,
     required this.navigationAlert,
     required this.onPlanRide,
+    required this.onUndoShapingPoint,
+    required this.onClearShapingPoints,
     required this.onStartNavigation,
     required this.onStopNavigation,
     required this.onSpeak,
@@ -1361,6 +1543,7 @@ class _RouteSheet extends StatelessWidget {
 
   final PlaceResult? origin;
   final PlaceResult? destination;
+  final List<PlaceResult> shapingPoints;
   final PlannedRoute? route;
   final bool routingBusy;
   final bool navigating;
@@ -1369,6 +1552,8 @@ class _RouteSheet extends StatelessWidget {
   final double? distanceToDestinationMeters;
   final String? navigationAlert;
   final VoidCallback onPlanRide;
+  final VoidCallback? onUndoShapingPoint;
+  final VoidCallback? onClearShapingPoints;
   final VoidCallback onStartNavigation;
   final VoidCallback onStopNavigation;
   final VoidCallback onSpeak;
@@ -1406,7 +1591,7 @@ class _RouteSheet extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        _subtitle(origin, destination),
+                        _subtitle(origin, destination, shapingPoints),
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -1418,7 +1603,9 @@ class _RouteSheet extends StatelessWidget {
                   runSpacing: 8,
                   children: [
                     FilledButton.icon(
-                      onPressed: !canRoute || routingBusy || navigating ? null : onPlanRide,
+                      onPressed: !canRoute || routingBusy || navigating
+                          ? null
+                          : onPlanRide,
                       icon: routingBusy
                           ? const SizedBox.square(
                               dimension: 18,
@@ -1431,8 +1618,8 @@ class _RouteSheet extends StatelessWidget {
                       onPressed: route == null
                           ? null
                           : navigating
-                              ? onStopNavigation
-                              : onStartNavigation,
+                          ? onStopNavigation
+                          : onStartNavigation,
                       icon: Icon(navigating ? Icons.stop : Icons.play_arrow),
                       label: Text(navigating ? 'Stop' : 'Start'),
                     ),
@@ -1447,9 +1634,40 @@ class _RouteSheet extends StatelessWidget {
             ),
             if (route != null && route!.steps.isNotEmpty) ...[
               const Divider(height: 22),
+              if (shapingPoints.isNotEmpty) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Chip(
+                      avatar: const Icon(Icons.edit_road_outlined, size: 18),
+                      label: Text(
+                        '${shapingPoints.length} shaping ${shapingPoints.length == 1 ? 'point' : 'points'}',
+                      ),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'Undo last shaping point',
+                      onPressed: onUndoShapingPoint,
+                      icon: const Icon(Icons.undo),
+                    ),
+                    IconButton.filledTonal(
+                      tooltip: 'Clear shaping points',
+                      onPressed: onClearShapingPoints,
+                      icon: const Icon(Icons.layers_clear_outlined),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+              ],
               if (navigating) ...[
                 _NavigationStatus(
-                  instruction: route!.steps[math.min(currentStepIndex, route!.steps.length - 1)].instruction,
+                  instruction: route!
+                      .steps[math.min(
+                        currentStepIndex,
+                        route!.steps.length - 1,
+                      )]
+                      .instruction,
                   distanceToNextStepMeters: distanceToNextStepMeters,
                   distanceToDestinationMeters: distanceToDestinationMeters,
                   alert: navigationAlert,
@@ -1524,13 +1742,20 @@ class _RouteSheet extends StatelessWidget {
     return '${_formatDistance(route!.distanceMeters)} · ${_formatDuration(route!.durationSeconds)}';
   }
 
-  String _subtitle(PlaceResult? origin, PlaceResult? destination) {
+  String _subtitle(
+    PlaceResult? origin,
+    PlaceResult? destination,
+    List<PlaceResult> shapingPoints,
+  ) {
     if (origin == null && destination == null) {
       return 'Search for places or tap the map to drop start and destination pins.';
     }
     final start = origin?.name ?? 'Choose start';
     final end = destination?.name ?? 'Choose destination';
-    return '$start → $end';
+    final via = shapingPoints.isEmpty
+        ? ''
+        : ' via ${shapingPoints.length} shaping ${shapingPoints.length == 1 ? 'point' : 'points'}';
+    return '$start → $end$via';
   }
 }
 
@@ -1570,15 +1795,17 @@ class _NavigationStatus extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: scheme.onPrimaryContainer,
-                          fontWeight: FontWeight.w800,
-                        ),
+                      color: scheme.onPrimaryContainer,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     [
-                      if (distanceToNextStepMeters != null) '${_formatDistance(distanceToNextStepMeters!)} to next',
-                      if (distanceToDestinationMeters != null) '${_formatDistance(distanceToDestinationMeters!)} left',
+                      if (distanceToNextStepMeters != null)
+                        '${_formatDistance(distanceToNextStepMeters!)} to next',
+                      if (distanceToDestinationMeters != null)
+                        '${_formatDistance(distanceToDestinationMeters!)} left',
                     ].join(' · '),
                     style: TextStyle(color: scheme.onPrimaryContainer),
                   ),
@@ -1593,10 +1820,7 @@ class _NavigationStatus extends StatelessWidget {
 }
 
 class _MapPin extends StatelessWidget {
-  const _MapPin({
-    required this.label,
-    required this.color,
-  });
+  const _MapPin({required this.label, required this.color});
 
   final String label;
   final Color color;
@@ -1642,7 +1866,9 @@ class _CurrentLocationMarker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final rotation = heading.isFinite && heading >= 0 ? degreesToRadians(heading) : 0.0;
+    final rotation = heading.isFinite && heading >= 0
+        ? degreesToRadians(heading)
+        : 0.0;
 
     return Transform.rotate(
       angle: headingUp ? 0 : rotation,
@@ -1672,10 +1898,7 @@ class _CurrentLocationMarker extends StatelessWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({
-    required this.message,
-    required this.onDismissed,
-  });
+  const _StatusBanner({required this.message, required this.onDismissed});
 
   final String message;
   final VoidCallback onDismissed;
