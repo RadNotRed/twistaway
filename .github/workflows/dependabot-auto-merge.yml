@@ -21,6 +21,9 @@ jobs:
     if: github.actor == 'dependabot[bot]' && !github.event.pull_request.draft
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Wait for PR checks
         env:
           GH_TOKEN: ${{ github.token }}
