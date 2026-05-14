@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -34,8 +35,7 @@ class _MotoPlannerAppState extends State<MotoPlannerApp> {
       builder: (lightDynamic, darkDynamic) {
         final lightScheme =
             lightDynamic ?? ColorScheme.fromSeed(seedColor: fallbackSeed);
-        final darkScheme =
-            darkDynamic ??
+        final darkScheme = darkDynamic ??
             ColorScheme.fromSeed(
               seedColor: fallbackSeed,
               brightness: Brightness.dark,
@@ -58,6 +58,10 @@ class _MotoPlannerAppState extends State<MotoPlannerApp> {
 }
 
 enum SearchTarget { origin, destination }
+
+enum RouteBuildMode { normal, draw }
+
+enum _NoticeTone { info, warning, error }
 
 enum MapStyle {
   roads('Roads', Icons.map_outlined),
@@ -86,9 +90,11 @@ class PlannerHome extends StatefulWidget {
 
 class _PlannerHomeState extends State<PlannerHome> {
   static const _defaultCenter = LatLng(39.8283, -98.5795);
+  static const _hideDrawHelpKey = 'planner.hideDrawHelp';
 
   final _mapController = MapController();
   final _tts = FlutterTts();
+  final _storage = const FlutterSecureStorage();
   final _placeSearch = PlaceSearchService();
   final _routing = RoutingService();
   final _originController = TextEditingController();
@@ -96,8 +102,10 @@ class _PlannerHomeState extends State<PlannerHome> {
   final _preferences = [...defaultPreferences];
   final _distance = const Distance();
   Timer? _autocompleteTimer;
+  final Map<int, Timer> _noticeTimers = {};
   StreamSubscription<Position>? _positionSubscription;
   int _searchSequence = 0;
+  int _noticeSequence = 0;
   int _navStepIndex = 0;
   int? _lastSpokenStepIndex;
   bool _programmaticTextEdit = false;
@@ -106,6 +114,9 @@ class _PlannerHomeState extends State<PlannerHome> {
   bool _followNavigation = true;
   bool _headingUp = true;
   bool _offRouteAlerted = false;
+  bool _hideDrawHelp = false;
+  double _loopTargetMiles = 35;
+  RouteBuildMode _routeBuildMode = RouteBuildMode.normal;
 
   SearchTarget _searchTarget = SearchTarget.destination;
   MapStyle _mapStyle = MapStyle.roads;
@@ -118,9 +129,9 @@ class _PlannerHomeState extends State<PlannerHome> {
   double? _distanceToDestinationMeters;
   String? _navigationAlert;
   List<PlaceResult> _searchResults = const [];
+  final List<_PlannerNotice> _notices = [];
   bool _searching = false;
   bool _routingBusy = false;
-  String? _message;
 
   @override
   void initState() {
@@ -129,12 +140,16 @@ class _PlannerHomeState extends State<PlannerHome> {
     _destinationController.addListener(
       () => _onQueryChanged(SearchTarget.destination),
     );
+    unawaited(_loadDrawHelpPreference());
     unawaited(_centerOnCurrentLocation(setAsOrigin: true, quiet: true));
   }
 
   @override
   void dispose() {
     _autocompleteTimer?.cancel();
+    for (final timer in _noticeTimers.values) {
+      timer.cancel();
+    }
     unawaited(_positionSubscription?.cancel());
     _originController.dispose();
     _destinationController.dispose();
@@ -144,6 +159,7 @@ class _PlannerHomeState extends State<PlannerHome> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 920;
+    final mapControlsBottom = _route == null ? 120.0 : (wide ? 292.0 : 382.0);
 
     return Scaffold(
       appBar: AppBar(
@@ -210,9 +226,16 @@ class _PlannerHomeState extends State<PlannerHome> {
                   route: _route,
                   mapStyle: _mapStyle,
                   currentPosition: _currentPosition,
+                  loopCenter: _destination?.type == 'loop return'
+                      ? _origin?.latLng
+                      : null,
+                  loopRadiusMeters: _destination?.type == 'loop return'
+                      ? _loopRadiusMeters()
+                      : null,
                   navigating: _navigating,
                   headingUp: _headingUp,
                   onTap: _dropPin,
+                  onRemoveShapingPoint: _removeShapingPoint,
                 ),
                 Positioned(
                   left: 12,
@@ -234,19 +257,21 @@ class _PlannerHomeState extends State<PlannerHome> {
                     onClear: _clearRoute,
                   ),
                 ),
-                if (_message != null)
+                if (_notices.isNotEmpty)
                   Positioned(
                     left: 16,
                     right: 16,
                     top: wide ? 156 : 172,
-                    child: _StatusBanner(
-                      message: _message!,
-                      onDismissed: () => setState(() => _message = null),
+                    child: _NoticeStack(
+                      notices: _notices,
+                      onDismissed: _dismissNotice,
                     ),
                   ),
-                Positioned(
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
                   right: 16,
-                  bottom: _route == null ? 120 : 214,
+                  bottom: mapControlsBottom,
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -327,13 +352,16 @@ class _PlannerHomeState extends State<PlannerHome> {
                     distanceToNextStepMeters: _distanceToNextStepMeters,
                     distanceToDestinationMeters: _distanceToDestinationMeters,
                     navigationAlert: _navigationAlert,
+                    drawMode: _routeBuildMode == RouteBuildMode.draw,
+                    loopTargetMiles: _loopTargetMiles,
                     onPlanRide: _planRoute,
-                    onUndoShapingPoint: _shapingPoints.isEmpty
-                        ? null
-                        : _undoLastShapingPoint,
-                    onClearShapingPoints: _shapingPoints.isEmpty
-                        ? null
-                        : _clearShapingPoints,
+                    onToggleDrawMode: _toggleDrawMode,
+                    onBuildLoopRide: _origin == null ? null : _buildLoopRide,
+                    onLoopTargetChanged: _updateLoopTarget,
+                    onUndoShapingPoint:
+                        _shapingPoints.isEmpty ? null : _undoLastShapingPoint,
+                    onClearShapingPoints:
+                        _shapingPoints.isEmpty ? null : _clearShapingPoints,
                     onStartNavigation: _startNavigation,
                     onStopNavigation: _stopNavigation,
                     onSpeak: _speakNextDirection,
@@ -351,8 +379,103 @@ class _PlannerHomeState extends State<PlannerHome> {
     return _PreferencePanel(
       preferences: _preferences,
       onChanged: _updatePreference,
+      rideFocus: _rideFocus,
+      onRideFocusChanged: _updateRideFocus,
       onReplan: _origin != null && _destination != null ? _planRoute : null,
     );
+  }
+
+  Future<void> _loadDrawHelpPreference() async {
+    try {
+      final value = await _storage.read(key: _hideDrawHelpKey);
+      if (mounted) {
+        setState(() => _hideDrawHelp = value == 'true');
+      }
+    } catch (_) {
+      // Keep the tutorial available if local preference storage is unavailable.
+    }
+  }
+
+  void _showNotice(
+    String message, {
+    required _NoticeTone tone,
+    Duration duration = const Duration(seconds: 5),
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    final id = ++_noticeSequence;
+    setState(() {
+      final duplicateIndex = _notices.indexWhere(
+        (notice) => notice.message == message,
+      );
+      if (duplicateIndex >= 0) {
+        final duplicate = _notices.removeAt(duplicateIndex);
+        _noticeTimers.remove(duplicate.id)?.cancel();
+      }
+      _notices.add(_PlannerNotice(id: id, message: message, tone: tone));
+      while (_notices.length > 2) {
+        final removed = _notices.removeAt(0);
+        _noticeTimers.remove(removed.id)?.cancel();
+      }
+    });
+
+    _noticeTimers[id] = Timer(duration, () => _dismissNotice(id));
+  }
+
+  void _dismissNotice(int id) {
+    _noticeTimers.remove(id)?.cancel();
+    if (!mounted) {
+      return;
+    }
+    setState(() => _notices.removeWhere((notice) => notice.id == id));
+  }
+
+  void _clearNotices() {
+    for (final timer in _noticeTimers.values) {
+      timer.cancel();
+    }
+    _noticeTimers.clear();
+    if (mounted) {
+      setState(_notices.clear);
+    }
+  }
+
+  Future<void> _showDrawHelpIfNeeded() async {
+    if (_hideDrawHelp || !mounted) {
+      return;
+    }
+
+    final neverShowAgain = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.draw_outlined),
+        title: const Text('Draw a route'),
+        content: const Text(
+          'Tap the map to add route-shaping points. Tap a numbered point again to remove it. Use Loop to draft a round trip, then adjust the points until the ride feels right.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Never show again'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Got it'),
+          ),
+        ],
+      ),
+    );
+
+    if (neverShowAgain == true) {
+      setState(() => _hideDrawHelp = true);
+      try {
+        await _storage.write(key: _hideDrawHelpKey, value: 'true');
+      } catch (_) {
+        // The in-memory setting still prevents repeat prompts in this session.
+      }
+    }
   }
 
   void _onQueryChanged(SearchTarget target) {
@@ -365,7 +488,6 @@ class _PlannerHomeState extends State<PlannerHome> {
         : _destinationController.text;
     setState(() {
       _searchTarget = target;
-      _message = null;
       _route = null;
       if (target == SearchTarget.origin) {
         _origin = null;
@@ -383,7 +505,7 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
 
     _autocompleteTimer = Timer(
-      const Duration(milliseconds: 220),
+      const Duration(milliseconds: 180),
       () => unawaited(_search(target, previewFirst: true)),
     );
   }
@@ -393,10 +515,34 @@ class _PlannerHomeState extends State<PlannerHome> {
     bool selectFirst = false,
     bool previewFirst = false,
   }) async {
+    if (target == SearchTarget.destination &&
+        _destination?.type == 'loop return' &&
+        _destinationController.text.trim() == 'Loop back to start') {
+      FocusManager.instance.primaryFocus?.unfocus();
+      setState(() {
+        _searchTarget = SearchTarget.destination;
+        _searchResults = const [];
+      });
+      await _planRouteIfReady();
+      return;
+    }
+
     final query = target == SearchTarget.origin
         ? _originController.text
         : _destinationController.text;
     final sequence = ++_searchSequence;
+    final coordinate = _parseCoordinateQuery(query);
+    if (coordinate != null) {
+      final place = PlaceResult(
+        name:
+            'Coordinates ${coordinate.latitude.toStringAsFixed(5)}, ${coordinate.longitude.toStringAsFixed(5)}',
+        latLng: coordinate,
+        type: 'coordinates',
+      );
+      await _selectPlace(place, targetOverride: target);
+      return;
+    }
+
     if (selectFirst) {
       FocusManager.instance.primaryFocus?.unfocus();
     }
@@ -404,7 +550,6 @@ class _PlannerHomeState extends State<PlannerHome> {
     setState(() {
       _searchTarget = target;
       _searching = true;
-      _message = null;
     });
 
     try {
@@ -421,11 +566,13 @@ class _PlannerHomeState extends State<PlannerHome> {
       }
       setState(() {
         _searchResults = results;
-        if (results.isEmpty) {
-          _message =
-              'No places found. Try a city, road, landmark, or full address.';
-        }
       });
+      if (results.isEmpty) {
+        _showNotice(
+          'No places found. Try a city, road, landmark, or full address.',
+          tone: _NoticeTone.warning,
+        );
+      }
       if (previewFirst && results.isNotEmpty) {
         _mapController.move(
           results.first.latLng,
@@ -434,7 +581,7 @@ class _PlannerHomeState extends State<PlannerHome> {
       }
     } catch (error) {
       if (mounted && sequence == _searchSequence) {
-        setState(() => _message = error.toString());
+        _showNotice(error.toString(), tone: _NoticeTone.error);
       }
     } finally {
       if (mounted && sequence == _searchSequence) {
@@ -461,7 +608,6 @@ class _PlannerHomeState extends State<PlannerHome> {
       _shapingPoints.clear();
       _programmaticTextEdit = false;
       _searchResults = const [];
-      _message = null;
     });
 
     _mapController.move(result.latLng, 13);
@@ -477,6 +623,7 @@ class _PlannerHomeState extends State<PlannerHome> {
     );
 
     setState(() {
+      _programmaticTextEdit = true;
       if (_origin == null || _searchTarget == SearchTarget.origin) {
         _origin = place;
         _originController.text = 'Dropped start';
@@ -488,13 +635,15 @@ class _PlannerHomeState extends State<PlannerHome> {
       } else {
         _shapingPoints.add(
           PlaceResult(
-            name: 'Scenic shaping point ${_shapingPoints.length + 1}',
+            name: _routeBuildMode == RouteBuildMode.draw
+                ? 'Drawn route point ${_shapingPoints.length + 1}'
+                : 'Scenic shaping point ${_shapingPoints.length + 1}',
             latLng: point,
             type: 'route shaping',
           ),
         );
       }
-      _message = null;
+      _programmaticTextEdit = false;
     });
 
     await _planRouteIfReady();
@@ -517,9 +666,9 @@ class _PlannerHomeState extends State<PlannerHome> {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (!quiet) {
-          setState(
-            () => _message =
-                'Turn on location services, then try current location again.',
+          _showNotice(
+            'Turn on location services, then try current location again.',
+            tone: _NoticeTone.warning,
           );
         }
         return false;
@@ -532,9 +681,9 @@ class _PlannerHomeState extends State<PlannerHome> {
       if (permission == LocationPermission.denied ||
           permission == LocationPermission.deniedForever) {
         if (!quiet) {
-          setState(
-            () => _message =
-                'Location permission is needed to use current location.',
+          _showNotice(
+            'Location permission is needed to use current location.',
+            tone: _NoticeTone.warning,
           );
         }
         return false;
@@ -555,7 +704,10 @@ class _PlannerHomeState extends State<PlannerHome> {
       return true;
     } catch (error) {
       if (!quiet) {
-        setState(() => _message = 'Current location failed: $error');
+        _showNotice(
+          'Current location failed: $error',
+          tone: _NoticeTone.error,
+        );
       }
       return false;
     } finally {
@@ -594,7 +746,6 @@ class _PlannerHomeState extends State<PlannerHome> {
         _searchTarget = SearchTarget.destination;
         _shapingPoints.clear();
       }
-      _message = null;
     });
     _mapController.move(place.latLng, 14);
     await _planRouteIfReady();
@@ -610,8 +761,9 @@ class _PlannerHomeState extends State<PlannerHome> {
 
     final serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
-      setState(
-        () => _message = 'Turn on location services to start navigation.',
+      _showNotice(
+        'Turn on location services to start navigation.',
+        tone: _NoticeTone.warning,
       );
       return;
     }
@@ -622,8 +774,9 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
     if (permission == LocationPermission.denied ||
         permission == LocationPermission.deniedForever) {
-      setState(
-        () => _message = 'Location permission is needed to start navigation.',
+      _showNotice(
+        'Location permission is needed to start navigation.',
+        tone: _NoticeTone.warning,
       );
       return;
     }
@@ -637,7 +790,6 @@ class _PlannerHomeState extends State<PlannerHome> {
       _lastSpokenStepIndex = null;
       _offRouteAlerted = false;
       _navigationAlert = 'Navigation started';
-      _message = null;
     });
     await _tts.speak(_currentInstruction);
 
@@ -647,13 +799,16 @@ class _PlannerHomeState extends State<PlannerHome> {
     );
     _positionSubscription =
         Geolocator.getPositionStream(locationSettings: settings).listen(
-          _onNavigationPosition,
-          onError: (Object error) {
-            if (mounted) {
-              setState(() => _message = 'Navigation location failed: $error');
-            }
-          },
-        );
+      _onNavigationPosition,
+      onError: (Object error) {
+        if (mounted) {
+          _showNotice(
+            'Navigation location failed: $error',
+            tone: _NoticeTone.error,
+          );
+        }
+      },
+    );
 
     final lastKnown = await _safeLastKnownPosition();
     if (lastKnown != null) {
@@ -692,8 +847,7 @@ class _PlannerHomeState extends State<PlannerHome> {
         .max(0, route.distanceMeters - progress.distanceAlongRouteMeters)
         .toDouble();
     final offRoute = progress.distanceFromRouteMeters;
-    final arrived =
-        destinationDistance < 40 ||
+    final arrived = destinationDistance < 40 ||
         _distance.as(LengthUnit.Meter, current, route.points.last) < 40;
 
     String? alert;
@@ -760,58 +914,60 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
   }
 
-  Future<void> _planRouteIfReady() async {
+  Future<void> _planRouteIfReady({bool fitCamera = true}) async {
     if (_origin != null && _destination != null) {
-      await _planRoute();
+      await _planRoute(fitCamera: fitCamera);
     }
   }
 
-  Future<void> _planRoute() async {
+  Future<void> _planRoute({bool fitCamera = true}) async {
     final origin = _origin;
     final destination = _destination;
     if (origin == null && destination != null) {
-      setState(
-        () =>
-            _message = 'Requesting location permission for your start point...',
+      _showNotice(
+        'Requesting location permission for your start point...',
+        tone: _NoticeTone.info,
       );
       final located = await _setCurrentLocationAsStart();
       if (!located) {
         return;
       }
-      await _planRouteIfReady();
+      await _planRouteIfReady(fitCamera: fitCamera);
       return;
     }
     if (origin == null || destination == null) {
-      setState(() => _message = 'Set a start and destination first.');
+      _showNotice(
+        'Set a start and destination first.',
+        tone: _NoticeTone.warning,
+      );
       return;
     }
 
     setState(() {
       _routingBusy = true;
-      _message = null;
     });
 
     try {
       final route = await _routing.route(
         origin: origin.latLng,
         destination: destination.latLng,
-        shapingPoints: _shapingPoints
-            .map((point) => point.latLng)
-            .toList(growable: false),
+        shapingPoints:
+            _shapingPoints.map((point) => point.latLng).toList(growable: false),
         preferences: _preferenceMap(),
       );
       setState(() {
         _route = route;
         _navStepIndex = 0;
-        _distanceToNextStepMeters = route.steps.isEmpty
-            ? null
-            : route.steps.first.distanceMeters;
+        _distanceToNextStepMeters =
+            route.steps.isEmpty ? null : route.steps.first.distanceMeters;
         _distanceToDestinationMeters = route.distanceMeters;
         _navigationAlert = null;
       });
-      _fitRoute(route.points);
+      if (fitCamera) {
+        _fitRoute(route.points);
+      }
     } catch (error) {
-      setState(() => _message = error.toString());
+      _showNotice(error.toString(), tone: _NoticeTone.error);
     } finally {
       if (mounted) {
         setState(() => _routingBusy = false);
@@ -851,9 +1007,8 @@ class _PlannerHomeState extends State<PlannerHome> {
         ..addAll(reversedShapingPoints);
       _programmaticTextEdit = true;
       _originController.text = _origin == null ? '' : _shortName(_origin!.name);
-      _destinationController.text = _destination == null
-          ? ''
-          : _shortName(_destination!.name);
+      _destinationController.text =
+          _destination == null ? '' : _shortName(_destination!.name);
       _programmaticTextEdit = false;
     });
     unawaited(_planRouteIfReady());
@@ -865,14 +1020,15 @@ class _PlannerHomeState extends State<PlannerHome> {
       _origin = null;
       _destination = null;
       _shapingPoints.clear();
+      _routeBuildMode = RouteBuildMode.normal;
       _route = null;
       _searchResults = const [];
       _programmaticTextEdit = true;
       _originController.clear();
       _destinationController.clear();
       _programmaticTextEdit = false;
-      _message = null;
     });
+    _clearNotices();
   }
 
   void _undoLastShapingPoint() {
@@ -881,7 +1037,6 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
     setState(() {
       _shapingPoints.removeLast();
-      _message = null;
     });
     unawaited(_planRouteIfReady());
   }
@@ -892,9 +1047,157 @@ class _PlannerHomeState extends State<PlannerHome> {
     }
     setState(() {
       _shapingPoints.clear();
-      _message = null;
     });
     unawaited(_planRouteIfReady());
+  }
+
+  void _removeShapingPoint(int index) {
+    if (index < 0 || index >= _shapingPoints.length) {
+      return;
+    }
+    setState(() {
+      _shapingPoints.removeAt(index);
+    });
+    unawaited(_planRouteIfReady());
+  }
+
+  void _toggleDrawMode() {
+    final enabling = _routeBuildMode != RouteBuildMode.draw;
+    setState(() {
+      _routeBuildMode = enabling ? RouteBuildMode.draw : RouteBuildMode.normal;
+    });
+    _showNotice(
+      enabling ? 'Draw mode enabled.' : 'Draw mode off.',
+      tone: _NoticeTone.info,
+    );
+    if (enabling) {
+      unawaited(_showDrawHelpIfNeeded());
+    }
+  }
+
+  void _buildLoopRide({bool fitCamera = true, bool announce = true}) {
+    final origin = _origin;
+    if (origin == null) {
+      _showNotice(
+        'Set a start point first.',
+        tone: _NoticeTone.warning,
+      );
+      return;
+    }
+
+    final radiusMeters = _loopRadiusMeters();
+    final loopPoints = _loopPoints(origin.latLng, radiusMeters);
+    setState(() {
+      _programmaticTextEdit = true;
+      _destination = PlaceResult(
+        name: '${origin.name} loop return',
+        latLng: origin.latLng,
+        type: 'loop return',
+      );
+      _destinationController.text = 'Loop back to start';
+      _shapingPoints
+        ..clear()
+        ..addAll([
+          for (var index = 0; index < loopPoints.length; index += 1)
+            PlaceResult(
+              name: 'Loop point ${index + 1}',
+              latLng: loopPoints[index],
+              type: 'loop shaping',
+            ),
+        ]);
+      _routeBuildMode = RouteBuildMode.draw;
+      _programmaticTextEdit = false;
+    });
+    if (announce) {
+      _showNotice(
+        'Loop ride drafted.',
+        tone: _NoticeTone.info,
+      );
+      unawaited(_showDrawHelpIfNeeded());
+    }
+    unawaited(_planRouteIfReady(fitCamera: fitCamera));
+  }
+
+  void _updateLoopTarget(double miles) {
+    setState(() => _loopTargetMiles = miles);
+    if (_destination?.type == 'loop return' && _origin != null) {
+      _buildLoopRide(fitCamera: false, announce: false);
+    }
+  }
+
+  double _loopRadiusMeters() {
+    final circumferenceMeters = _loopTargetMiles * 1609.344;
+    return (circumferenceMeters / (2 * math.pi)).clamp(2400.0, 22000.0);
+  }
+
+  List<LatLng> _loopPoints(LatLng center, double radiusMeters) {
+    final eastWestLandBridge = center.longitude < -72.55 &&
+        center.longitude > -73.98 &&
+        center.latitude > 40.52 &&
+        center.latitude < 41.05;
+    if (eastWestLandBridge) {
+      final eastWestMeters = radiusMeters * 1.25;
+      final northSouthMeters = radiusMeters * 0.54;
+      const offsets = [
+        (-0.92, -0.22),
+        (-0.34, 0.86),
+        (0.46, 0.78),
+        (0.98, 0.08),
+        (0.38, -0.66),
+        (-0.46, -0.62),
+      ];
+      return offsets
+          .map(
+            (offset) => _offsetPoint(
+              center,
+              eastMeters: offset.$1 * eastWestMeters,
+              northMeters: offset.$2 * northSouthMeters,
+            ),
+          )
+          .toList(growable: false);
+    }
+
+    const bearings = [315.0, 25.0, 92.0, 158.0, 224.0, 286.0];
+    return bearings
+        .map((bearing) =>
+            _destinationPoint(center, radiusMeters * 0.88, bearing))
+        .toList(growable: false);
+  }
+
+  LatLng _offsetPoint(
+    LatLng center, {
+    required double eastMeters,
+    required double northMeters,
+  }) {
+    final northSouth = _destinationPoint(
+      center,
+      northMeters.abs(),
+      northMeters >= 0 ? 0 : 180,
+    );
+    return _destinationPoint(
+      northSouth,
+      eastMeters.abs(),
+      eastMeters >= 0 ? 90 : 270,
+    );
+  }
+
+  LatLng _destinationPoint(
+      LatLng start, double distanceMeters, double bearingDegrees) {
+    const earthRadiusMeters = 6371000.0;
+    final angularDistance = distanceMeters / earthRadiusMeters;
+    final bearing = degreesToRadians(bearingDegrees);
+    final lat1 = degreesToRadians(start.latitude);
+    final lon1 = degreesToRadians(start.longitude);
+    final lat2 = math.asin(
+      math.sin(lat1) * math.cos(angularDistance) +
+          math.cos(lat1) * math.sin(angularDistance) * math.cos(bearing),
+    );
+    final lon2 = lon1 +
+        math.atan2(
+          math.sin(bearing) * math.sin(angularDistance) * math.cos(lat1),
+          math.cos(angularDistance) - math.sin(lat1) * math.sin(lat2),
+        );
+    return LatLng(radiansToDegrees(lat2), radiansToDegrees(lon2));
   }
 
   Future<void> _speakNextDirection() async {
@@ -914,8 +1217,67 @@ class _PlannerHomeState extends State<PlannerHome> {
       return 'Navigation started.';
     }
     return route
-        .steps[math.min(_navStepIndex, route.steps.length - 1)]
-        .instruction;
+        .steps[math.min(_navStepIndex, route.steps.length - 1)].instruction;
+  }
+
+  String get _rideFocus {
+    final values = _preferenceMap();
+    if ((values['pureBackroads'] ?? 0) >= 0.5 ||
+        (values['avoidMainRoads'] ?? 0) >= 0.5) {
+      return 'backroads';
+    }
+    if ((values['autoScenicDetour'] ?? 0) >= 0.5 ||
+        (values['scenic'] ?? 0) >= 0.85) {
+      return 'scenic';
+    }
+    return 'balanced';
+  }
+
+  void _updateRideFocus(String focus) {
+    setState(() {
+      void setPreference(String targetKey, double targetValue) {
+        final index = _preferences.indexWhere(
+          (preference) => preference.key == targetKey,
+        );
+        if (index >= 0) {
+          _preferences[index] = _preferences[index].copyWith(
+            value: targetValue,
+          );
+        }
+      }
+
+      switch (focus) {
+        case 'scenic':
+          setPreference('scenic', 0.95);
+          setPreference('twisty', 0.7);
+          setPreference('avoidHighways', 1);
+          setPreference('avoidMainRoads', 0);
+          setPreference('pureBackroads', 0);
+          setPreference('autoScenicDetour', 1);
+          setPreference('targetHighways', 0);
+          setPreference('targetStraightRoads', 0);
+          break;
+        case 'backroads':
+          setPreference('scenic', 0.65);
+          setPreference('twisty', 0.8);
+          setPreference('avoidHighways', 1);
+          setPreference('avoidMainRoads', 1);
+          setPreference('pureBackroads', 1);
+          setPreference('autoScenicDetour', 0);
+          setPreference('targetHighways', 0);
+          setPreference('targetStraightRoads', 0);
+          break;
+        default:
+          setPreference('scenic', 0.6);
+          setPreference('twisty', 0.6);
+          setPreference('avoidMainRoads', 0);
+          setPreference('pureBackroads', 0);
+          setPreference('autoScenicDetour', 0);
+          setPreference('targetHighways', 0);
+          setPreference('targetStraightRoads', 0);
+          break;
+      }
+    });
   }
 
   void _updatePreference(String key, double value) {
@@ -932,22 +1294,65 @@ class _PlannerHomeState extends State<PlannerHome> {
       }
 
       setPreference(key, value);
+      if (key == 'autoScenicDetour' && value >= 0.5) {
+        setPreference('pureBackroads', 0);
+        setPreference('targetHighways', 0);
+        setPreference('targetStraightRoads', 0);
+      }
       if (key == 'avoidHighways' && value >= 0.5) {
         setPreference('targetHighways', 0);
       }
       if (key == 'avoidMainRoads' && value >= 0.5) {
         setPreference('targetHighways', 0);
+        setPreference('targetStraightRoads', 0);
+        setPreference('autoScenicDetour', 0);
+      }
+      if (key == 'pureBackroads' && value >= 0.5) {
+        setPreference('avoidHighways', 1);
+        setPreference('avoidMainRoads', 1);
+        setPreference('autoScenicDetour', 0);
+        setPreference('targetHighways', 0);
+        setPreference('targetStraightRoads', 0);
       }
       if (key == 'targetHighways' && value >= 0.5) {
         setPreference('avoidHighways', 0);
         setPreference('avoidMainRoads', 0);
+        setPreference('pureBackroads', 0);
+        setPreference('autoScenicDetour', 0);
+        setPreference('targetStraightRoads', 0);
+      }
+      if (key == 'targetStraightRoads' && value >= 0.5) {
+        setPreference('avoidMainRoads', 0);
+        setPreference('pureBackroads', 0);
+        setPreference('autoScenicDetour', 0);
+        setPreference('targetHighways', 0);
       }
     });
   }
 
   Map<String, double> _preferenceMap() => {
-    for (final preference in _preferences) preference.key: preference.value,
-  };
+        for (final preference in _preferences) preference.key: preference.value,
+      };
+
+  LatLng? _parseCoordinateQuery(String query) {
+    final match = RegExp(
+      r'^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$',
+    ).firstMatch(query);
+    if (match == null) {
+      return null;
+    }
+    final first = double.tryParse(match.group(1)!);
+    final second = double.tryParse(match.group(2)!);
+    if (first == null || second == null) {
+      return null;
+    }
+
+    final latLng =
+        first.abs() <= 90 && second.abs() <= 180 ? LatLng(first, second) : null;
+    final lngLat =
+        second.abs() <= 90 && first.abs() <= 180 ? LatLng(second, first) : null;
+    return latLng ?? lngLat;
+  }
 
   SearchContext _searchContext(SearchTarget target) {
     final bounds = _mapController.camera.visibleBounds;
@@ -1069,6 +1474,18 @@ class _SegmentProjection {
   final double t;
 }
 
+class _PlannerNotice {
+  const _PlannerNotice({
+    required this.id,
+    required this.message,
+    required this.tone,
+  });
+
+  final int id;
+  final String message;
+  final _NoticeTone tone;
+}
+
 class _PlannerMap extends StatelessWidget {
   const _PlannerMap({
     required this.controller,
@@ -1078,9 +1495,12 @@ class _PlannerMap extends StatelessWidget {
     required this.route,
     required this.mapStyle,
     required this.currentPosition,
+    required this.loopCenter,
+    required this.loopRadiusMeters,
     required this.navigating,
     required this.headingUp,
     required this.onTap,
+    required this.onRemoveShapingPoint,
   });
 
   static const _trafficTileTemplate = String.fromEnvironment(
@@ -1094,9 +1514,12 @@ class _PlannerMap extends StatelessWidget {
   final PlannedRoute? route;
   final MapStyle mapStyle;
   final Position? currentPosition;
+  final LatLng? loopCenter;
+  final double? loopRadiusMeters;
   final bool navigating;
   final bool headingUp;
   final ValueChanged<LatLng> onTap;
+  final ValueChanged<int> onRemoveShapingPoint;
 
   @override
   Widget build(BuildContext context) {
@@ -1175,6 +1598,19 @@ class _PlannerMap extends StatelessWidget {
               ),
             ],
           ),
+        if (loopCenter != null && loopRadiusMeters != null)
+          CircleLayer(
+            circles: [
+              CircleMarker(
+                point: loopCenter!,
+                radius: loopRadiusMeters!,
+                useRadiusInMeter: true,
+                color: scheme.primary.withValues(alpha: 0.08),
+                borderStrokeWidth: 2,
+                borderColor: scheme.primary.withValues(alpha: 0.64),
+              ),
+            ],
+          ),
         MarkerLayer(
           markers: [
             if (origin != null)
@@ -1196,9 +1632,16 @@ class _PlannerMap extends StatelessWidget {
                 point: indexed.$2.latLng,
                 width: 38,
                 height: 38,
-                child: _MapPin(
-                  label: '${indexed.$1 + 1}',
-                  color: scheme.secondary,
+                child: Tooltip(
+                  message: 'Remove shaping point ${indexed.$1 + 1}',
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onRemoveShapingPoint(indexed.$1),
+                    child: _MapPin(
+                      label: '${indexed.$1 + 1}',
+                      color: scheme.secondary,
+                    ),
+                  ),
                 ),
               ),
             if (currentPosition != null)
@@ -1240,7 +1683,8 @@ class _PlannerMap extends StatelessWidget {
       MapStyle.satellite =>
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       MapStyle.roads ||
-      MapStyle.traffic => 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      MapStyle.traffic =>
+        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     };
   }
 
@@ -1248,10 +1692,9 @@ class _PlannerMap extends StatelessWidget {
     return switch (mapStyle) {
       MapStyle.satellite => 'Tiles © Esri',
       MapStyle.roads => '© OpenStreetMap contributors',
-      MapStyle.traffic =>
-        _trafficTileTemplate.isEmpty
-            ? '© OpenStreetMap contributors'
-            : '© OpenStreetMap contributors · traffic provider',
+      MapStyle.traffic => _trafficTileTemplate.isEmpty
+          ? '© OpenStreetMap contributors'
+          : '© OpenStreetMap contributors · traffic provider',
     };
   }
 }
@@ -1445,9 +1888,8 @@ class _SearchField extends StatelessWidget {
         prefixIcon: Icon(icon),
         labelText: label,
         filled: true,
-        fillColor: selected
-            ? scheme.primaryContainer.withValues(alpha: 0.38)
-            : null,
+        fillColor:
+            selected ? scheme.primaryContainer.withValues(alpha: 0.38) : null,
         border: const OutlineInputBorder(),
       ),
     );
@@ -1458,11 +1900,15 @@ class _PreferencePanel extends StatelessWidget {
   const _PreferencePanel({
     required this.preferences,
     required this.onChanged,
+    required this.rideFocus,
+    required this.onRideFocusChanged,
     required this.onReplan,
   });
 
   final List<RoutePreference> preferences;
   final void Function(String key, double value) onChanged;
+  final String rideFocus;
+  final ValueChanged<String> onRideFocusChanged;
   final VoidCallback? onReplan;
 
   @override
@@ -1480,6 +1926,31 @@ class _PreferencePanel extends StatelessWidget {
           onPressed: onReplan,
           icon: const Icon(Icons.route_outlined),
           label: const Text('Apply and replan'),
+        ),
+        const SizedBox(height: 14),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            _RideFocusChip(
+              label: 'Balanced',
+              icon: Icons.tune,
+              selected: rideFocus == 'balanced',
+              onSelected: () => onRideFocusChanged('balanced'),
+            ),
+            _RideFocusChip(
+              label: 'Scenic',
+              icon: Icons.landscape_outlined,
+              selected: rideFocus == 'scenic',
+              onSelected: () => onRideFocusChanged('scenic'),
+            ),
+            _RideFocusChip(
+              label: 'Backroads',
+              icon: Icons.forest_outlined,
+              selected: rideFocus == 'backroads',
+              onSelected: () => onRideFocusChanged('backroads'),
+            ),
+          ],
         ),
         const SizedBox(height: 14),
         for (final preference in preferences)
@@ -1521,6 +1992,31 @@ class _PreferencePanel extends StatelessWidget {
   }
 }
 
+class _RideFocusChip extends StatelessWidget {
+  const _RideFocusChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      avatar: Icon(icon, size: 18),
+      label: Text(label),
+      selected: selected,
+      onSelected: (_) => onSelected(),
+      showCheckmark: false,
+    );
+  }
+}
+
 class _RouteSheet extends StatelessWidget {
   const _RouteSheet({
     required this.origin,
@@ -1533,7 +2029,12 @@ class _RouteSheet extends StatelessWidget {
     required this.distanceToNextStepMeters,
     required this.distanceToDestinationMeters,
     required this.navigationAlert,
+    required this.drawMode,
+    required this.loopTargetMiles,
     required this.onPlanRide,
+    required this.onToggleDrawMode,
+    required this.onBuildLoopRide,
+    required this.onLoopTargetChanged,
     required this.onUndoShapingPoint,
     required this.onClearShapingPoints,
     required this.onStartNavigation,
@@ -1551,7 +2052,12 @@ class _RouteSheet extends StatelessWidget {
   final double? distanceToNextStepMeters;
   final double? distanceToDestinationMeters;
   final String? navigationAlert;
+  final bool drawMode;
+  final double loopTargetMiles;
   final VoidCallback onPlanRide;
+  final VoidCallback onToggleDrawMode;
+  final VoidCallback? onBuildLoopRide;
+  final ValueChanged<double> onLoopTargetChanged;
   final VoidCallback? onUndoShapingPoint;
   final VoidCallback? onClearShapingPoints;
   final VoidCallback onStartNavigation;
@@ -1614,12 +2120,23 @@ class _RouteSheet extends StatelessWidget {
                           : const Icon(Icons.navigation_outlined),
                       label: Text(route == null ? 'Plan ride' : 'Replan'),
                     ),
+                    FilledButton.tonalIcon(
+                      onPressed: navigating ? null : onToggleDrawMode,
+                      icon:
+                          Icon(drawMode ? Icons.gesture : Icons.draw_outlined),
+                      label: Text(drawMode ? 'Drawing' : 'Draw'),
+                    ),
+                    FilledButton.tonalIcon(
+                      onPressed: navigating ? null : onBuildLoopRide,
+                      icon: const Icon(Icons.loop),
+                      label: const Text('Loop'),
+                    ),
                     FilledButton.icon(
                       onPressed: route == null
                           ? null
                           : navigating
-                          ? onStopNavigation
-                          : onStartNavigation,
+                              ? onStopNavigation
+                              : onStartNavigation,
                       icon: Icon(navigating ? Icons.stop : Icons.play_arrow),
                       label: Text(navigating ? 'Stop' : 'Start'),
                     ),
@@ -1631,6 +2148,12 @@ class _RouteSheet extends StatelessWidget {
                   ],
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            _LoopDistanceControl(
+              value: loopTargetMiles,
+              enabled: !navigating && onBuildLoopRide != null,
+              onChanged: onLoopTargetChanged,
             ),
             if (route != null && route!.steps.isNotEmpty) ...[
               const Divider(height: 22),
@@ -1664,9 +2187,9 @@ class _RouteSheet extends StatelessWidget {
                 _NavigationStatus(
                   instruction: route!
                       .steps[math.min(
-                        currentStepIndex,
-                        route!.steps.length - 1,
-                      )]
+                    currentStepIndex,
+                    route!.steps.length - 1,
+                  )]
                       .instruction,
                   distanceToNextStepMeters: distanceToNextStepMeters,
                   distanceToDestinationMeters: distanceToDestinationMeters,
@@ -1759,6 +2282,60 @@ class _RouteSheet extends StatelessWidget {
   }
 }
 
+class _LoopDistanceControl extends StatelessWidget {
+  const _LoopDistanceControl({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final double value;
+  final bool enabled;
+  final ValueChanged<double> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.radio_button_unchecked,
+                    size: 18, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Loop target',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                Text('${value.round()} mi'),
+              ],
+            ),
+            Slider(
+              value: value,
+              min: 12,
+              max: 90,
+              divisions: 26,
+              label: '${value.round()} mi',
+              onChanged: enabled ? onChanged : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _NavigationStatus extends StatelessWidget {
   const _NavigationStatus({
     required this.instruction,
@@ -1795,9 +2372,9 @@ class _NavigationStatus extends StatelessWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: scheme.onPrimaryContainer,
-                      fontWeight: FontWeight.w800,
-                    ),
+                          color: scheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w800,
+                        ),
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -1866,9 +2443,8 @@ class _CurrentLocationMarker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final rotation = heading.isFinite && heading >= 0
-        ? degreesToRadians(heading)
-        : 0.0;
+    final rotation =
+        heading.isFinite && heading >= 0 ? degreesToRadians(heading) : 0.0;
 
     return Transform.rotate(
       angle: headingUp ? 0 : rotation,
@@ -1897,26 +2473,89 @@ class _CurrentLocationMarker extends StatelessWidget {
   }
 }
 
-class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.message, required this.onDismissed});
+class _NoticeStack extends StatelessWidget {
+  const _NoticeStack({required this.notices, required this.onDismissed});
 
-  final String message;
+  final List<_PlannerNotice> notices;
+  final ValueChanged<int> onDismissed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final notice in notices)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _NoticeCard(
+                  notice: notice,
+                  onDismissed: () => onDismissed(notice.id),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NoticeCard extends StatelessWidget {
+  const _NoticeCard({required this.notice, required this.onDismissed});
+
+  final _PlannerNotice notice;
   final VoidCallback onDismissed;
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final (icon, background, foreground) = switch (notice.tone) {
+      _NoticeTone.info => (
+          Icons.info_outline,
+          scheme.secondaryContainer,
+          scheme.onSecondaryContainer,
+        ),
+      _NoticeTone.warning => (
+          Icons.search_off_outlined,
+          scheme.tertiaryContainer,
+          scheme.onTertiaryContainer,
+        ),
+      _NoticeTone.error => (
+          Icons.error_outline,
+          scheme.errorContainer,
+          scheme.onErrorContainer,
+        ),
+    };
+
     return Material(
-      elevation: 6,
+      elevation: 8,
+      color: background,
       borderRadius: BorderRadius.circular(12),
-      color: Theme.of(context).colorScheme.errorContainer,
+      clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.fromLTRB(12, 8, 6, 8),
         child: Row(
           children: [
-            Expanded(child: Text(message)),
+            Icon(icon, color: foreground, size: 20),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                notice.message,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: foreground,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
             IconButton(
               tooltip: 'Dismiss',
               onPressed: onDismissed,
+              color: foreground,
               icon: const Icon(Icons.close),
             ),
           ],
@@ -1945,3 +2584,5 @@ String _formatDuration(double seconds) {
 }
 
 double degreesToRadians(double value) => value * math.pi / 180;
+
+double radiansToDegrees(double value) => value * 180 / math.pi;

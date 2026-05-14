@@ -14,12 +14,12 @@ class RoutePreference {
   final bool isToggle;
 
   RoutePreference copyWith({double? value}) => RoutePreference(
-    key: key,
-    label: label,
-    description: description,
-    value: value ?? this.value,
-    isToggle: isToggle,
-  );
+        key: key,
+        label: label,
+        description: description,
+        value: value ?? this.value,
+        isToggle: isToggle,
+      );
 }
 
 const defaultPreferences = [
@@ -47,6 +47,14 @@ const defaultPreferences = [
     label: 'Backroads',
     description: 'Strongly prefer local and county roads over major arterials.',
     value: 1,
+    isToggle: true,
+  ),
+  RoutePreference(
+    key: 'pureBackroads',
+    label: 'Pure backroads',
+    description:
+        'Aggressively avoid highways, arterials, parkways, and direct main-road corridors.',
+    value: 0,
     isToggle: true,
   ),
   RoutePreference(

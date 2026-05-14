@@ -33,13 +33,15 @@ class SearchContext {
   final double? west;
 
   Map<String, String> toQueryParameters() => {
-        if (center != null) 'centerLat': center!.latitude.toString(),
-        if (center != null) 'centerLng': center!.longitude.toString(),
-        if (north != null) 'north': north.toString(),
-        if (south != null) 'south': south.toString(),
-        if (east != null) 'east': east.toString(),
-        if (west != null) 'west': west.toString(),
+        if (center != null) 'centerLat': _coordinate(center!.latitude),
+        if (center != null) 'centerLng': _coordinate(center!.longitude),
+        if (north != null) 'north': _coordinate(north!),
+        if (south != null) 'south': _coordinate(south!),
+        if (east != null) 'east': _coordinate(east!),
+        if (west != null) 'west': _coordinate(west!),
       };
+
+  String _coordinate(double value) => value.toStringAsFixed(2);
 }
 
 class PlaceSearchService {
@@ -55,8 +57,10 @@ class PlaceSearchService {
   final http.Client _client;
   final String _apiBaseUrl;
   final Map<String, List<PlaceResult>> _cache = {};
+  final Map<String, Future<List<PlaceResult>>> _inFlight = {};
 
-  Future<List<PlaceResult>> search(String query, {SearchContext? context}) async {
+  Future<List<PlaceResult>> search(String query,
+      {SearchContext? context}) async {
     final trimmed = query.trim();
     if (trimmed.length < 3) {
       return const [];
@@ -72,11 +76,31 @@ class PlaceSearchService {
       return cached;
     }
 
-    final response = await _client.get(
-      Uri.parse('$_apiBaseUrl/integrations/search').replace(
-        queryParameters: queryParameters,
-      ),
-    );
+    final existing = _inFlight[cacheKey];
+    if (existing != null) {
+      return existing;
+    }
+
+    final request = _fetchPlaces(queryParameters, cacheKey);
+    _inFlight[cacheKey] = request;
+    try {
+      return await request;
+    } finally {
+      _inFlight.remove(cacheKey);
+    }
+  }
+
+  Future<List<PlaceResult>> _fetchPlaces(
+    Map<String, String> queryParameters,
+    String cacheKey,
+  ) async {
+    final response = await _client
+        .get(
+          Uri.parse('$_apiBaseUrl/integrations/search').replace(
+            queryParameters: queryParameters,
+          ),
+        )
+        .timeout(const Duration(seconds: 5));
 
     if (response.statusCode != 200) {
       throw Exception('Location search failed (${response.statusCode})');
@@ -84,20 +108,21 @@ class PlaceSearchService {
 
     final decoded = jsonDecode(response.body) as Map<String, dynamic>;
     final results = decoded['results'] as List<dynamic>? ?? const [];
-    final places = results
-        .map((item) {
-          final value = item as Map<String, dynamic>;
-          return PlaceResult(
-            name: value['name'] as String? ?? 'Unknown place',
-            latLng: LatLng(
-              (value['latitude'] as num).toDouble(),
-              (value['longitude'] as num).toDouble(),
-            ),
-            type: value['type'] as String?,
-            distanceMeters: (value['distanceMeters'] as num?)?.toDouble(),
-          );
-        })
-        .toList(growable: false);
+    final places = results.map((item) {
+      final value = item as Map<String, dynamic>;
+      return PlaceResult(
+        name: value['name'] as String? ?? 'Unknown place',
+        latLng: LatLng(
+          (value['latitude'] as num).toDouble(),
+          (value['longitude'] as num).toDouble(),
+        ),
+        type: value['type'] as String?,
+        distanceMeters: (value['distanceMeters'] as num?)?.toDouble(),
+      );
+    }).toList(growable: false);
+    if (_cache.length > 80) {
+      _cache.remove(_cache.keys.first);
+    }
     _cache[cacheKey] = places;
     return places;
   }
