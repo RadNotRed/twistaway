@@ -68,11 +68,13 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr review "$PR_NUMBER" --approve --body "Dependency update checks passed."
 
       - name: Merge Dependabot PR
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: gh pr merge "$PR_NUMBER" --squash --delete-branch
