@@ -5,6 +5,10 @@ import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:vector_map_tiles/vector_map_tiles.dart';
+import 'package:vector_map_tiles_pmtiles/vector_map_tiles_pmtiles.dart';
+
+import 'map_themes.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -1486,7 +1490,7 @@ class _PlannerNotice {
   final _NoticeTone tone;
 }
 
-class _PlannerMap extends StatelessWidget {
+class _PlannerMap extends StatefulWidget {
   const _PlannerMap({
     required this.controller,
     required this.origin,
@@ -1507,6 +1511,11 @@ class _PlannerMap extends StatelessWidget {
     'MOTOPLANNER_TRAFFIC_TILE_TEMPLATE',
   );
 
+  static const _pmtilesSource = String.fromEnvironment(
+    'MOTOPLANNER_PMTILES_SOURCE',
+    defaultValue: '',
+  );
+
   final MapController controller;
   final PlaceResult? origin;
   final PlaceResult? destination;
@@ -1522,35 +1531,81 @@ class _PlannerMap extends StatelessWidget {
   final ValueChanged<int> onRemoveShapingPoint;
 
   @override
+  State<_PlannerMap> createState() => _PlannerMapState();
+}
+
+class _PlannerMapState extends State<_PlannerMap> {
+  Future<PmTilesVectorTileProvider>? _tileProviderFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_PlannerMap._pmtilesSource.isNotEmpty) {
+      _tileProviderFuture = PmTilesVectorTileProvider.fromSource(
+        _PlannerMap._pmtilesSource,
+      );
+    }
+  }
+
+  bool get _useVectorTiles =>
+      _tileProviderFuture != null &&
+      widget.mapStyle != MapStyle.satellite;
+
+  @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final darkMap = Theme.of(context).brightness == Brightness.dark;
-    final trafficConfigured = _trafficTileTemplate.isNotEmpty;
+    final trafficConfigured = _PlannerMap._trafficTileTemplate.isNotEmpty;
 
     return FlutterMap(
-      mapController: controller,
+      mapController: widget.controller,
       options: MapOptions(
         initialCenter: _PlannerHomeState._defaultCenter,
         initialZoom: 4,
         minZoom: 3,
         maxZoom: 18,
-        onTap: (_, point) => onTap(point),
+        onTap: (_, point) => widget.onTap(point),
       ),
       children: [
-        TileLayer(
-          urlTemplate: _baseTileTemplate,
-          userAgentPackageName: 'com.motoplanner.mobile',
-          tileBuilder: darkMap && mapStyle != MapStyle.satellite
-              ? darkModeTileBuilder
-              : null,
-        ),
-        if (mapStyle == MapStyle.traffic && trafficConfigured)
+        if (_useVectorTiles)
+          FutureBuilder<PmTilesVectorTileProvider>(
+            future: _tileProviderFuture,
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return TileLayer(
+                  urlTemplate:
+                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.motoplanner.mobile',
+                  tileBuilder:
+                      darkMap ? darkModeTileBuilder : null,
+                );
+              }
+              return VectorTileLayer(
+                theme: darkMap
+                    ? MapThemes.googleDark()
+                    : ProtomapsThemes.lightV4(),
+                tileProviders: TileProviders({
+                  'protomaps': snapshot.data!,
+                }),
+              );
+            },
+          )
+        else
           TileLayer(
-            urlTemplate: _trafficTileTemplate,
+            urlTemplate: _baseTileTemplate,
+            userAgentPackageName: 'com.motoplanner.mobile',
+            tileBuilder:
+                darkMap && widget.mapStyle != MapStyle.satellite
+                    ? darkModeTileBuilder
+                    : null,
+          ),
+        if (widget.mapStyle == MapStyle.traffic && trafficConfigured)
+          TileLayer(
+            urlTemplate: _PlannerMap._trafficTileTemplate,
             userAgentPackageName: 'com.motoplanner.mobile',
             tileBuilder: darkMap ? darkModeTileBuilder : null,
           ),
-        if (mapStyle == MapStyle.traffic && !trafficConfigured)
+        if (widget.mapStyle == MapStyle.traffic && !trafficConfigured)
           Positioned(
             left: 12,
             top: 92,
@@ -1586,11 +1641,11 @@ class _PlannerMap extends StatelessWidget {
               ),
             ),
           ),
-        if (route != null)
+        if (widget.route != null)
           PolylineLayer(
             polylines: [
               Polyline(
-                points: route!.points,
+                points: widget.route!.points,
                 strokeWidth: 6,
                 color: scheme.primary,
                 borderStrokeWidth: 3,
@@ -1598,12 +1653,12 @@ class _PlannerMap extends StatelessWidget {
               ),
             ],
           ),
-        if (loopCenter != null && loopRadiusMeters != null)
+        if (widget.loopCenter != null && widget.loopRadiusMeters != null)
           CircleLayer(
             circles: [
               CircleMarker(
-                point: loopCenter!,
-                radius: loopRadiusMeters!,
+                point: widget.loopCenter!,
+                radius: widget.loopRadiusMeters!,
                 useRadiusInMeter: true,
                 color: scheme.primary.withValues(alpha: 0.08),
                 borderStrokeWidth: 2,
@@ -1613,21 +1668,21 @@ class _PlannerMap extends StatelessWidget {
           ),
         MarkerLayer(
           markers: [
-            if (origin != null)
+            if (widget.origin != null)
               Marker(
-                point: origin!.latLng,
+                point: widget.origin!.latLng,
                 width: 46,
                 height: 46,
                 child: _MapPin(label: 'A', color: scheme.primary),
               ),
-            if (destination != null)
+            if (widget.destination != null)
               Marker(
-                point: destination!.latLng,
+                point: widget.destination!.latLng,
                 width: 46,
                 height: 46,
                 child: _MapPin(label: 'B', color: scheme.tertiary),
               ),
-            for (final indexed in shapingPoints.indexed)
+            for (final indexed in widget.shapingPoints.indexed)
               Marker(
                 point: indexed.$2.latLng,
                 width: 38,
@@ -1636,7 +1691,7 @@ class _PlannerMap extends StatelessWidget {
                   message: 'Remove shaping point ${indexed.$1 + 1}',
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () => onRemoveShapingPoint(indexed.$1),
+                    onTap: () => widget.onRemoveShapingPoint(indexed.$1),
                     child: _MapPin(
                       label: '${indexed.$1 + 1}',
                       color: scheme.secondary,
@@ -1644,18 +1699,18 @@ class _PlannerMap extends StatelessWidget {
                   ),
                 ),
               ),
-            if (currentPosition != null)
+            if (widget.currentPosition != null)
               Marker(
                 point: LatLng(
-                  currentPosition!.latitude,
-                  currentPosition!.longitude,
+                  widget.currentPosition!.latitude,
+                  widget.currentPosition!.longitude,
                 ),
                 width: 52,
                 height: 52,
                 child: _CurrentLocationMarker(
-                  heading: currentPosition!.heading,
-                  navigating: navigating,
-                  headingUp: headingUp,
+                  heading: widget.currentPosition!.heading,
+                  navigating: widget.navigating,
+                  headingUp: widget.headingUp,
                 ),
               ),
           ],
@@ -1679,7 +1734,7 @@ class _PlannerMap extends StatelessWidget {
   }
 
   String get _baseTileTemplate {
-    return switch (mapStyle) {
+    return switch (widget.mapStyle) {
       MapStyle.satellite =>
         'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       MapStyle.roads ||
@@ -1689,10 +1744,19 @@ class _PlannerMap extends StatelessWidget {
   }
 
   String get _attribution {
-    return switch (mapStyle) {
+    if (_useVectorTiles) {
+      return switch (widget.mapStyle) {
+        MapStyle.satellite => 'Tiles © Esri',
+        MapStyle.roads => '© OpenStreetMap · Protomaps',
+        MapStyle.traffic => _PlannerMap._trafficTileTemplate.isEmpty
+            ? '© OpenStreetMap · Protomaps'
+            : '© OpenStreetMap · Protomaps · traffic provider',
+      };
+    }
+    return switch (widget.mapStyle) {
       MapStyle.satellite => 'Tiles © Esri',
       MapStyle.roads => '© OpenStreetMap contributors',
-      MapStyle.traffic => _trafficTileTemplate.isEmpty
+      MapStyle.traffic => _PlannerMap._trafficTileTemplate.isEmpty
           ? '© OpenStreetMap contributors'
           : '© OpenStreetMap contributors · traffic provider',
     };

@@ -103,6 +103,62 @@ flutter analyze
 flutter test
 ```
 
+## Map Tiles
+
+The mobile app uses [Protomaps](https://protomaps.com/) vector tiles from a self-hosted PMTiles file. The tile source is configured at build time using the `MOTOPLANNER_PMTILES_SOURCE` Dart define. When the define is empty or unset, the app falls back to OpenStreetMap raster tiles.
+
+### Local Development
+
+Download or extract a regional PMTiles file using the `pmtiles` CLI:
+
+```bash
+# Install the CLI
+npm install -g pmtiles
+
+# Extract the US Northeast for quick testing (~1-2 GB)
+pmtiles extract https://data.source.coop/protomaps/openstreetmap/v4.pmtiles northeast.pmtiles --maxzoom=15 --bbox=-80.0,38.5,-71.0,42.5
+
+# Extract the full world capped at zoom 14 (~40-60 GB)
+pmtiles extract https://data.source.coop/protomaps/openstreetmap/v4.pmtiles world-z14.pmtiles --maxzoom=14
+```
+
+Run the app with a local file path:
+
+```bash
+cd apps/mobile
+flutter run -d chrome --dart-define=MOTOPLANNER_PMTILES_SOURCE=C:/path/to/northeast.pmtiles
+```
+
+### Docker Hosting (Testing)
+
+Serve the PMTiles file with nginx. Range request support is required and enabled by default in nginx.
+
+```bash
+docker run -d -p 8090:80 -v /path/to/tiles:/usr/share/nginx/html:ro nginx:alpine
+```
+
+Run the app pointing at the Docker host:
+
+```bash
+flutter run -d chrome --dart-define=MOTOPLANNER_PMTILES_SOURCE=http://localhost:8090/northeast.pmtiles
+```
+
+### Cloudflare R2 (Production)
+
+Upload the PMTiles file to an R2 bucket. R2 supports HTTP range requests natively and has zero egress fees.
+
+1. Create a bucket and enable public access or use a custom domain.
+2. Upload the file: `pmtiles upload world-z14.pmtiles --bucket=your-r2-bucket`
+3. Build the app with the R2 URL:
+
+```bash
+flutter build web --dart-define=MOTOPLANNER_PMTILES_SOURCE=https://tiles.yourdomain.com/world-z14.pmtiles
+```
+
+### Satellite Tiles
+
+Satellite imagery uses Esri World Imagery raster tiles as a fallback since Protomaps does not include satellite data.
+
 ## GitHub Actions
 
 The repository includes:
