@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' as ml;
+import 'package:pointer_interceptor/pointer_interceptor.dart';
 
 import 'features/planner/place_search_service.dart';
 import 'features/planner/planner_models.dart';
@@ -64,9 +67,9 @@ enum RouteBuildMode { normal, draw }
 enum _NoticeTone { info, warning, error }
 
 enum MapStyle {
-  roads('Roads', Icons.map_outlined),
-  satellite('Satellite', Icons.satellite_alt_outlined),
-  traffic('Traffic', Icons.traffic_outlined);
+  bright('Light', Icons.light_mode_outlined),
+  fiord('Dark', Icons.dark_mode_outlined),
+  threeD('3D', Icons.view_in_ar_outlined);
 
   const MapStyle(this.label, this.icon);
 
@@ -92,7 +95,10 @@ class _PlannerHomeState extends State<PlannerHome> {
   static const _defaultCenter = LatLng(39.8283, -98.5795);
   static const _hideDrawHelpKey = 'planner.hideDrawHelp';
 
-  final _mapController = MapController();
+  final _mapController = _PlannerMapController(
+    center: _defaultCenter,
+    zoom: 4,
+  );
   final _tts = FlutterTts();
   final _storage = const FlutterSecureStorage();
   final _placeSearch = PlaceSearchService();
@@ -119,7 +125,7 @@ class _PlannerHomeState extends State<PlannerHome> {
   RouteBuildMode _routeBuildMode = RouteBuildMode.normal;
 
   SearchTarget _searchTarget = SearchTarget.destination;
-  MapStyle _mapStyle = MapStyle.roads;
+  MapStyle _mapStyle = MapStyle.bright;
   PlaceResult? _origin;
   PlaceResult? _destination;
   final List<PlaceResult> _shapingPoints = [];
@@ -241,20 +247,22 @@ class _PlannerHomeState extends State<PlannerHome> {
                   left: 12,
                   top: 12,
                   right: 12,
-                  child: _SearchCard(
-                    originController: _originController,
-                    destinationController: _destinationController,
-                    searching: _searching,
-                    results: _searchResults,
-                    searchTarget: _searchTarget,
-                    onSearch: (target) => _search(target, selectFirst: true),
-                    onQueryChanged: (target) =>
-                        setState(() => _searchTarget = target),
-                    onTargetChanged: (target) =>
-                        setState(() => _searchTarget = target),
-                    onResultSelected: _selectPlace,
-                    onSwap: _swapRouteEnds,
-                    onClear: _clearRoute,
+                  child: PointerInterceptor(
+                    child: _SearchCard(
+                      originController: _originController,
+                      destinationController: _destinationController,
+                      searching: _searching,
+                      results: _searchResults,
+                      searchTarget: _searchTarget,
+                      onSearch: (target) => _search(target, selectFirst: true),
+                      onQueryChanged: (target) =>
+                          setState(() => _searchTarget = target),
+                      onTargetChanged: (target) =>
+                          setState(() => _searchTarget = target),
+                      onResultSelected: _selectPlace,
+                      onSwap: _swapRouteEnds,
+                      onClear: _clearRoute,
+                    ),
                   ),
                 ),
                 if (_notices.isNotEmpty)
@@ -262,9 +270,11 @@ class _PlannerHomeState extends State<PlannerHome> {
                     left: 16,
                     right: 16,
                     top: wide ? 156 : 172,
-                    child: _NoticeStack(
-                      notices: _notices,
-                      onDismissed: _dismissNotice,
+                    child: PointerInterceptor(
+                      child: _NoticeStack(
+                        notices: _notices,
+                        onDismissed: _dismissNotice,
+                      ),
                     ),
                   ),
                 AnimatedPositioned(
@@ -272,99 +282,100 @@ class _PlannerHomeState extends State<PlannerHome> {
                   curve: Curves.easeOutCubic,
                   right: 16,
                   bottom: mapControlsBottom,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      FloatingActionButton.small(
-                        heroTag: 'follow',
-                        tooltip: _followNavigation
-                            ? 'Following location'
-                            : 'Follow location',
-                        onPressed: _currentPosition == null
-                            ? null
-                            : () {
-                                setState(
-                                  () => _followNavigation = !_followNavigation,
-                                );
-                                if (_followNavigation) {
-                                  _moveToPosition(_currentPosition!);
+                  child: PointerInterceptor(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FloatingActionButton.small(
+                          heroTag: 'follow',
+                          tooltip: _followNavigation
+                              ? 'Following location'
+                              : 'Follow location',
+                          onPressed: _currentPosition == null
+                              ? null
+                              : () {
+                                  setState(
+                                    () =>
+                                        _followNavigation = !_followNavigation,
+                                  );
+                                  if (_followNavigation) {
+                                    _moveToPosition(_currentPosition!);
+                                  }
+                                },
+                          child: Icon(
+                            _followNavigation
+                                ? Icons.explore
+                                : Icons.explore_outlined,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        FloatingActionButton.small(
+                          heroTag: 'heading',
+                          tooltip: _headingUp ? 'Heading up' : 'North up',
+                          onPressed: _navigating
+                              ? () {
+                                  setState(() => _headingUp = !_headingUp);
+                                  if (!_headingUp) {
+                                    _mapController.rotate(0);
+                                  } else if (_currentPosition != null) {
+                                    _moveToPosition(_currentPosition!);
+                                  }
                                 }
-                              },
-                        child: Icon(
-                          _followNavigation
-                              ? Icons.explore
-                              : Icons.explore_outlined,
+                              : null,
+                          child: Icon(
+                            _headingUp ? Icons.navigation : Icons.north,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      FloatingActionButton.small(
-                        heroTag: 'heading',
-                        tooltip: _headingUp ? 'Heading up' : 'North up',
-                        onPressed: _navigating
-                            ? () {
-                                setState(() => _headingUp = !_headingUp);
-                                if (!_headingUp) {
-                                  _mapController.rotate(0);
-                                } else if (_currentPosition != null) {
-                                  _moveToPosition(_currentPosition!);
-                                }
-                              }
-                            : null,
-                        child: Icon(
-                          _headingUp ? Icons.navigation : Icons.north,
+                        const SizedBox(height: 8),
+                        FloatingActionButton.small(
+                          heroTag: 'zoomIn',
+                          tooltip: 'Zoom in',
+                          onPressed: () => _mapController.zoomBy(1),
+                          child: const Icon(Icons.add),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      FloatingActionButton.small(
-                        heroTag: 'zoomIn',
-                        tooltip: 'Zoom in',
-                        onPressed: () => _mapController.move(
-                          _mapController.camera.center,
-                          _mapController.camera.zoom + 1,
+                        const SizedBox(height: 8),
+                        FloatingActionButton.small(
+                          heroTag: 'zoomOut',
+                          tooltip: 'Zoom out',
+                          onPressed: () => _mapController.zoomBy(-1),
+                          child: const Icon(Icons.remove),
                         ),
-                        child: const Icon(Icons.add),
-                      ),
-                      const SizedBox(height: 8),
-                      FloatingActionButton.small(
-                        heroTag: 'zoomOut',
-                        tooltip: 'Zoom out',
-                        onPressed: () => _mapController.move(
-                          _mapController.camera.center,
-                          _mapController.camera.zoom - 1,
-                        ),
-                        child: const Icon(Icons.remove),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
                 Positioned(
                   left: 12,
                   right: 12,
                   bottom: 12,
-                  child: _RouteSheet(
-                    origin: _origin,
-                    destination: _destination,
-                    shapingPoints: _shapingPoints,
-                    route: _route,
-                    routingBusy: _routingBusy,
-                    navigating: _navigating,
-                    currentStepIndex: _navStepIndex,
-                    distanceToNextStepMeters: _distanceToNextStepMeters,
-                    distanceToDestinationMeters: _distanceToDestinationMeters,
-                    navigationAlert: _navigationAlert,
-                    drawMode: _routeBuildMode == RouteBuildMode.draw,
-                    loopTargetMiles: _loopTargetMiles,
-                    onPlanRide: _planRoute,
-                    onToggleDrawMode: _toggleDrawMode,
-                    onBuildLoopRide: _origin == null ? null : _buildLoopRide,
-                    onLoopTargetChanged: _updateLoopTarget,
-                    onUndoShapingPoint:
-                        _shapingPoints.isEmpty ? null : _undoLastShapingPoint,
-                    onClearShapingPoints:
-                        _shapingPoints.isEmpty ? null : _clearShapingPoints,
-                    onStartNavigation: _startNavigation,
-                    onStopNavigation: _stopNavigation,
-                    onSpeak: _speakNextDirection,
+                  child: PointerInterceptor(
+                    child: _RouteSheet(
+                      origin: _origin,
+                      destination: _destination,
+                      shapingPoints: _shapingPoints,
+                      route: _route,
+                      routingBusy: _routingBusy,
+                      navigating: _navigating,
+                      currentStepIndex: _navStepIndex,
+                      distanceToNextStepMeters: _distanceToNextStepMeters,
+                      distanceToDestinationMeters: _distanceToDestinationMeters,
+                      navigationAlert: _navigationAlert,
+                      drawMode: _routeBuildMode == RouteBuildMode.draw,
+                      loopTargetMiles: _loopTargetMiles,
+                      onPlanRide: _planRoute,
+                      onToggleDrawMode: _toggleDrawMode,
+                      onBuildLoopRide: _origin == null ? null : _buildLoopRide,
+                      onLoopTargetChanged: _updateLoopTarget,
+                      onUndoShapingPoint: _shapingPoints.isEmpty
+                          ? null
+                          : _undoLastShapingPoint,
+                      onClearShapingPoints: _shapingPoints.isEmpty
+                          ? null
+                          : _clearShapingPoints,
+                      onStartNavigation: _startNavigation,
+                      onStopNavigation: _stopNavigation,
+                      onSpeak: _speakNextDirection,
+                    ),
                   ),
                 ),
               ],
@@ -984,11 +995,9 @@ class _PlannerHomeState extends State<PlannerHome> {
         if (!mounted) {
           return;
         }
-        _mapController.fitCamera(
-          CameraFit.bounds(
-            bounds: LatLngBounds.fromPoints(points),
-            padding: const EdgeInsets.fromLTRB(48, 170, 48, 230),
-          ),
+        _mapController.fitBounds(
+          points,
+          padding: const EdgeInsets.fromLTRB(48, 170, 48, 230),
         );
       }),
     );
@@ -1486,7 +1495,215 @@ class _PlannerNotice {
   final _NoticeTone tone;
 }
 
-class _PlannerMap extends StatelessWidget {
+ml.LatLng _toMapLibre(LatLng point) {
+  return ml.LatLng(point.latitude, point.longitude);
+}
+
+LatLng _fromMapLibre(ml.LatLng point) {
+  return LatLng(point.latitude, point.longitude);
+}
+
+String _hex(Color color) {
+  final value = color.toARGB32();
+  final red = (value >> 16) & 0xff;
+  final green = (value >> 8) & 0xff;
+  final blue = value & 0xff;
+  return '#${red.toRadixString(16).padLeft(2, '0')}'
+      '${green.toRadixString(16).padLeft(2, '0')}'
+      '${blue.toRadixString(16).padLeft(2, '0')}';
+}
+
+List<ml.LatLng> _circlePoints(LatLng center, double radiusMeters) {
+  return [
+    for (var index = 0; index <= 72; index += 1)
+      _toMapLibre(
+        _destinationFrom(center, radiusMeters, index * 5 * math.pi / 180),
+      ),
+  ];
+}
+
+LatLng _destinationFrom(
+  LatLng center,
+  double distanceMeters,
+  double bearingRadians,
+) {
+  const earthRadiusMeters = 6371000.0;
+  final angularDistance = distanceMeters / earthRadiusMeters;
+  final latitude1 = center.latitude * math.pi / 180;
+  final longitude1 = center.longitude * math.pi / 180;
+  final latitude2 = math.asin(
+    math.sin(latitude1) * math.cos(angularDistance) +
+        math.cos(latitude1) *
+            math.sin(angularDistance) *
+            math.cos(bearingRadians),
+  );
+  final longitude2 = longitude1 +
+      math.atan2(
+        math.sin(bearingRadians) *
+            math.sin(angularDistance) *
+            math.cos(latitude1),
+        math.cos(angularDistance) - math.sin(latitude1) * math.sin(latitude2),
+      );
+  return LatLng(latitude2 * 180 / math.pi, longitude2 * 180 / math.pi);
+}
+
+class _PlannerCamera {
+  const _PlannerCamera({
+    required this.center,
+    required this.zoom,
+    this.bearing = 0,
+  });
+
+  final LatLng center;
+  final double zoom;
+  final double bearing;
+
+  _PlannerVisibleBounds get visibleBounds {
+    final span = (180 / math.pow(2, zoom - 2)).clamp(0.01, 120.0).toDouble();
+    final latitudeSpan = span;
+    final longitudeSpan =
+        (span / math.cos(degreesToRadians(center.latitude)).abs())
+            .clamp(0.01, 180.0)
+            .toDouble();
+    return _PlannerVisibleBounds(
+      north: (center.latitude + latitudeSpan / 2).clamp(-90.0, 90.0),
+      south: (center.latitude - latitudeSpan / 2).clamp(-90.0, 90.0),
+      east: (center.longitude + longitudeSpan / 2).clamp(-180.0, 180.0),
+      west: (center.longitude - longitudeSpan / 2).clamp(-180.0, 180.0),
+    );
+  }
+}
+
+class _PlannerVisibleBounds {
+  const _PlannerVisibleBounds({
+    required this.north,
+    required this.south,
+    required this.east,
+    required this.west,
+  });
+
+  final double north;
+  final double south;
+  final double east;
+  final double west;
+}
+
+class _PlannerMapController {
+  _PlannerMapController({required LatLng center, required double zoom})
+      : camera = _PlannerCamera(center: center, zoom: zoom);
+
+  _PlannerCamera camera;
+  ml.MapLibreMapController? _mapController;
+
+  void attach(ml.MapLibreMapController controller) {
+    _mapController = controller;
+    _applyCamera();
+  }
+
+  void detach(ml.MapLibreMapController controller) {
+    if (_mapController == controller) {
+      _mapController = null;
+    }
+  }
+
+  void syncFromMap(ml.CameraPosition? position) {
+    if (position == null) {
+      return;
+    }
+    camera = _PlannerCamera(
+      center: _fromMapLibre(position.target),
+      zoom: position.zoom,
+      bearing: position.bearing,
+    );
+  }
+
+  void move(LatLng center, double zoom) {
+    camera = _PlannerCamera(
+      center: center,
+      zoom: zoom.clamp(3, 18).toDouble(),
+      bearing: camera.bearing,
+    );
+    _applyCamera();
+  }
+
+  void zoomBy(double delta) {
+    move(camera.center, camera.zoom + delta);
+  }
+
+  void rotate(double bearing) {
+    camera = _PlannerCamera(
+      center: camera.center,
+      zoom: camera.zoom,
+      bearing: bearing,
+    );
+    _applyCamera();
+  }
+
+  void fitBounds(List<LatLng> points, {required EdgeInsets padding}) {
+    if (points.isEmpty) {
+      return;
+    }
+    final bounds = _boundsFor(points);
+    camera = _PlannerCamera(center: _centerFor(bounds), zoom: camera.zoom);
+    unawaited(
+      _mapController?.animateCamera(
+        ml.CameraUpdate.newLatLngBounds(
+          bounds,
+          left: padding.left,
+          top: padding.top,
+          right: padding.right,
+          bottom: padding.bottom,
+        ),
+        duration: const Duration(milliseconds: 350),
+      ),
+    );
+  }
+
+  void _applyCamera() {
+    final controller = _mapController;
+    if (controller == null) {
+      return;
+    }
+    unawaited(
+      controller.animateCamera(
+        ml.CameraUpdate.newCameraPosition(
+          ml.CameraPosition(
+            target: _toMapLibre(camera.center),
+            zoom: camera.zoom,
+            bearing: camera.bearing,
+          ),
+        ),
+        duration: const Duration(milliseconds: 220),
+      ),
+    );
+  }
+
+  static ml.LatLngBounds _boundsFor(List<LatLng> points) {
+    var south = points.first.latitude;
+    var north = points.first.latitude;
+    var west = points.first.longitude;
+    var east = points.first.longitude;
+    for (final point in points.skip(1)) {
+      south = math.min(south, point.latitude);
+      north = math.max(north, point.latitude);
+      west = math.min(west, point.longitude);
+      east = math.max(east, point.longitude);
+    }
+    return ml.LatLngBounds(
+      southwest: ml.LatLng(south, west),
+      northeast: ml.LatLng(north, east),
+    );
+  }
+
+  static LatLng _centerFor(ml.LatLngBounds bounds) {
+    return LatLng(
+      (bounds.southwest.latitude + bounds.northeast.latitude) / 2,
+      (bounds.southwest.longitude + bounds.northeast.longitude) / 2,
+    );
+  }
+}
+
+class _PlannerMap extends StatefulWidget {
   const _PlannerMap({
     required this.controller,
     required this.origin,
@@ -1503,11 +1720,7 @@ class _PlannerMap extends StatelessWidget {
     required this.onRemoveShapingPoint,
   });
 
-  static const _trafficTileTemplate = String.fromEnvironment(
-    'MOTOPLANNER_TRAFFIC_TILE_TEMPLATE',
-  );
-
-  final MapController controller;
+  final _PlannerMapController controller;
   final PlaceResult? origin;
   final PlaceResult? destination;
   final List<PlaceResult> shapingPoints;
@@ -1522,181 +1735,309 @@ class _PlannerMap extends StatelessWidget {
   final ValueChanged<int> onRemoveShapingPoint;
 
   @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final darkMap = Theme.of(context).brightness == Brightness.dark;
-    final trafficConfigured = _trafficTileTemplate.isNotEmpty;
+  State<_PlannerMap> createState() => _PlannerMapState();
+}
 
-    return FlutterMap(
-      mapController: controller,
-      options: MapOptions(
-        initialCenter: _PlannerHomeState._defaultCenter,
-        initialZoom: 4,
-        minZoom: 3,
-        maxZoom: 18,
-        onTap: (_, point) => onTap(point),
+class _PlannerMapState extends State<_PlannerMap> {
+  ml.MapLibreMapController? _controller;
+  MapStyle? _loadedStyle;
+  Object? _lastAnnotationKey;
+  String? _styleString;
+  String? _loadingStyleAsset;
+  String? _styleAssetForString;
+  bool _ignoreNextMapClick = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_styleAssetForString != null && _styleAssetForString != _styleAsset) {
+      _loadedStyle = null;
+      _lastAnnotationKey = null;
+      _styleString = null;
+      _styleAssetForString = null;
+    }
+    _loadStyleIfNeeded();
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlannerMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.mapStyle != widget.mapStyle) {
+      _loadedStyle = null;
+      _lastAnnotationKey = null;
+      _styleString = null;
+      _styleAssetForString = null;
+      _loadStyleIfNeeded();
+    } else {
+      _refreshAnnotationsIfNeeded();
+    }
+  }
+
+  @override
+  void dispose() {
+    final controller = _controller;
+    if (controller != null) {
+      controller.onSymbolTapped.remove(_handleSymbolTap);
+      widget.controller.detach(controller);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _loadStyleIfNeeded();
+    final styleString = _mapLibreStyleString;
+    if (styleString == null) {
+      return ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    return ml.MapLibreMap(
+      key: ValueKey(_styleAsset),
+      initialCameraPosition: ml.CameraPosition(
+        target: _toMapLibre(widget.controller.camera.center),
+        zoom: widget.controller.camera.zoom,
+        bearing: _initialBearing,
+        tilt: _initialTilt,
       ),
-      children: [
-        TileLayer(
-          urlTemplate: _baseTileTemplate,
-          userAgentPackageName: 'com.motoplanner.mobile',
-          tileBuilder: darkMap && mapStyle != MapStyle.satellite
-              ? darkModeTileBuilder
-              : null,
-        ),
-        if (mapStyle == MapStyle.traffic && trafficConfigured)
-          TileLayer(
-            urlTemplate: _trafficTileTemplate,
-            userAgentPackageName: 'com.motoplanner.mobile',
-            tileBuilder: darkMap ? darkModeTileBuilder : null,
-          ),
-        if (mapStyle == MapStyle.traffic && !trafficConfigured)
-          Positioned(
-            left: 12,
-            top: 92,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: scheme.surface.withValues(alpha: 0.92),
-                borderRadius: BorderRadius.circular(8),
-                boxShadow: const [
-                  BoxShadow(
-                    blurRadius: 10,
-                    offset: Offset(0, 3),
-                    color: Color(0x22000000),
-                  ),
-                ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.traffic_outlined,
-                      size: 18,
-                      color: scheme.primary,
-                    ),
-                    const SizedBox(width: 8),
-                    const Text('Traffic provider not configured'),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        if (route != null)
-          PolylineLayer(
-            polylines: [
-              Polyline(
-                points: route!.points,
-                strokeWidth: 6,
-                color: scheme.primary,
-                borderStrokeWidth: 3,
-                borderColor: scheme.surface,
-              ),
-            ],
-          ),
-        if (loopCenter != null && loopRadiusMeters != null)
-          CircleLayer(
-            circles: [
-              CircleMarker(
-                point: loopCenter!,
-                radius: loopRadiusMeters!,
-                useRadiusInMeter: true,
-                color: scheme.primary.withValues(alpha: 0.08),
-                borderStrokeWidth: 2,
-                borderColor: scheme.primary.withValues(alpha: 0.64),
-              ),
-            ],
-          ),
-        MarkerLayer(
-          markers: [
-            if (origin != null)
-              Marker(
-                point: origin!.latLng,
-                width: 46,
-                height: 46,
-                child: _MapPin(label: 'A', color: scheme.primary),
-              ),
-            if (destination != null)
-              Marker(
-                point: destination!.latLng,
-                width: 46,
-                height: 46,
-                child: _MapPin(label: 'B', color: scheme.tertiary),
-              ),
-            for (final indexed in shapingPoints.indexed)
-              Marker(
-                point: indexed.$2.latLng,
-                width: 38,
-                height: 38,
-                child: Tooltip(
-                  message: 'Remove shaping point ${indexed.$1 + 1}',
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => onRemoveShapingPoint(indexed.$1),
-                    child: _MapPin(
-                      label: '${indexed.$1 + 1}',
-                      color: scheme.secondary,
-                    ),
-                  ),
-                ),
-              ),
-            if (currentPosition != null)
-              Marker(
-                point: LatLng(
-                  currentPosition!.latitude,
-                  currentPosition!.longitude,
-                ),
-                width: 52,
-                height: 52,
-                child: _CurrentLocationMarker(
-                  heading: currentPosition!.heading,
-                  navigating: navigating,
-                  headingUp: headingUp,
-                ),
-              ),
-          ],
-        ),
-        Positioned(
-          right: 8,
-          bottom: 8,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: scheme.surface.withValues(alpha: 0.86),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              child: Text(_attribution, style: const TextStyle(fontSize: 11)),
-            ),
-          ),
-        ),
-      ],
+      minMaxZoomPreference: const ml.MinMaxZoomPreference(3, 18),
+      styleString: styleString,
+      trackCameraPosition: true,
+      compassEnabled: false,
+      attributionButtonPosition: ml.AttributionButtonPosition.bottomRight,
+      attributionButtonMargins: const math.Point(8, 8),
+      onMapCreated: _onMapCreated,
+      onStyleLoadedCallback: _onStyleLoaded,
+      onMapClick: _handleMapClick,
+      onCameraIdle: () => widget.controller.syncFromMap(
+        _controller?.cameraPosition,
+      ),
     );
   }
 
-  String get _baseTileTemplate {
-    return switch (mapStyle) {
-      MapStyle.satellite =>
-        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-      MapStyle.roads ||
-      MapStyle.traffic =>
-        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  Future<void> _loadStyleIfNeeded() async {
+    final asset = _styleAsset;
+    if (kIsWeb) {
+      if (_styleString != _webStyleUrl) {
+        _styleString = _webStyleUrl;
+        _styleAssetForString = asset;
+        _loadingStyleAsset = null;
+        _loadedStyle = null;
+        _lastAnnotationKey = null;
+      }
+      return;
+    }
+    if ((_styleString != null && _styleAssetForString == asset) ||
+        _loadingStyleAsset == asset) {
+      return;
+    }
+    _loadingStyleAsset = asset;
+    final style = await rootBundle.loadString(asset);
+    if (!mounted || _loadingStyleAsset != asset) {
+      return;
+    }
+    setState(() {
+      _styleString = style;
+      _styleAssetForString = asset;
+      _loadingStyleAsset = null;
+      _loadedStyle = null;
+      _lastAnnotationKey = null;
+    });
+  }
+
+  void _onMapCreated(ml.MapLibreMapController controller) {
+    _controller = controller;
+    widget.controller.attach(controller);
+    controller.onSymbolTapped.add(_handleSymbolTap);
+  }
+
+  void _onStyleLoaded() {
+    _loadedStyle = _effectiveMapStyle;
+    _lastAnnotationKey = null;
+    _refreshAnnotationsIfNeeded();
+  }
+
+  void _handleSymbolTap(ml.Symbol symbol) {
+    _ignoreNextMapClick = true;
+    final index = symbol.data?['shapingIndex'];
+    if (index is int) {
+      widget.onRemoveShapingPoint(index);
+    }
+  }
+
+  void _handleMapClick(math.Point<double> _, ml.LatLng coordinates) {
+    if (_ignoreNextMapClick) {
+      _ignoreNextMapClick = false;
+      return;
+    }
+    widget.onTap(_fromMapLibre(coordinates));
+  }
+
+  void _refreshAnnotationsIfNeeded() {
+    if (_controller == null || _loadedStyle != _effectiveMapStyle) {
+      return;
+    }
+    final key = Object.hashAll([
+      _effectiveMapStyle,
+      widget.origin?.latLng,
+      widget.destination?.latLng,
+      ...widget.shapingPoints.map((point) => point.latLng),
+      ...?widget.route?.points,
+      widget.currentPosition?.latitude,
+      widget.currentPosition?.longitude,
+      widget.currentPosition?.heading,
+      widget.loopCenter,
+      widget.loopRadiusMeters,
+      widget.navigating,
+      widget.headingUp,
+      Theme.of(context).colorScheme.primary,
+      Theme.of(context).colorScheme.secondary,
+      Theme.of(context).colorScheme.tertiary,
+      Theme.of(context).colorScheme.surface,
+    ]);
+    if (_lastAnnotationKey == key) {
+      return;
+    }
+    _lastAnnotationKey = key;
+    unawaited(_rebuildAnnotations());
+  }
+
+  Future<void> _rebuildAnnotations() async {
+    final controller = _controller;
+    if (controller == null || _loadedStyle != _effectiveMapStyle) {
+      return;
+    }
+    final scheme = Theme.of(context).colorScheme;
+    await controller.clearSymbols();
+    await controller.clearCircles();
+    await controller.clearLines();
+
+    if (widget.loopCenter != null && widget.loopRadiusMeters != null) {
+      await controller.addLine(
+        ml.LineOptions(
+          geometry: _circlePoints(widget.loopCenter!, widget.loopRadiusMeters!),
+          lineColor: _hex(scheme.primary),
+          lineOpacity: 0.64,
+          lineWidth: 2,
+        ),
+      );
+    }
+
+    final route = widget.route;
+    if (route != null) {
+      final geometry = route.points.map(_toMapLibre).toList(growable: false);
+      await controller.addLine(
+        ml.LineOptions(
+          geometry: geometry,
+          lineColor: _hex(scheme.surface),
+          lineWidth: 9,
+          lineJoin: 'round',
+        ),
+      );
+      await controller.addLine(
+        ml.LineOptions(
+          geometry: geometry,
+          lineColor: _hex(scheme.primary),
+          lineWidth: 6,
+          lineJoin: 'round',
+        ),
+      );
+    }
+
+    if (widget.origin != null) {
+      await _addLabeledPin('A', widget.origin!.latLng, scheme.primary);
+    }
+    if (widget.destination != null) {
+      await _addLabeledPin('B', widget.destination!.latLng, scheme.tertiary);
+    }
+    for (final indexed in widget.shapingPoints.indexed) {
+      await _addLabeledPin(
+        '${indexed.$1 + 1}',
+        indexed.$2.latLng,
+        scheme.secondary,
+        data: {'shapingIndex': indexed.$1},
+      );
+    }
+    if (widget.currentPosition != null) {
+      final position = widget.currentPosition!;
+      final heading = widget.navigating &&
+              widget.headingUp &&
+              position.heading.isFinite &&
+              position.heading >= 0
+          ? position.heading
+          : 0.0;
+      await _addLabeledPin(
+        '▲',
+        LatLng(position.latitude, position.longitude),
+        scheme.primary,
+        size: 18,
+        rotate: heading,
+      );
+    }
+  }
+
+  Future<void> _addLabeledPin(
+    String label,
+    LatLng point,
+    Color color, {
+    Map<String, dynamic>? data,
+    double size = 13,
+    double rotate = 0,
+  }) async {
+    final controller = _controller;
+    if (controller == null) {
+      return;
+    }
+    await controller.addCircle(
+      ml.CircleOptions(
+        geometry: _toMapLibre(point),
+        circleRadius: 15,
+        circleColor: _hex(color),
+        circleStrokeColor: '#ffffff',
+        circleStrokeWidth: 2,
+      ),
+      data,
+    );
+    await controller.addSymbol(
+      ml.SymbolOptions(
+        geometry: _toMapLibre(point),
+        textField: label,
+        textSize: size,
+        textColor: '#ffffff',
+        textHaloColor: _hex(color),
+        textHaloWidth: 1,
+        textRotate: rotate,
+        zIndex: 10,
+      ),
+      data,
+    );
+  }
+
+  MapStyle get _effectiveMapStyle {
+    return widget.mapStyle;
+  }
+
+  String get _styleAsset {
+    return switch (_effectiveMapStyle) {
+      MapStyle.bright => 'assets/map_styles/bright.json',
+      MapStyle.fiord => 'assets/map_styles/fiord.json',
+      MapStyle.threeD => 'assets/map_styles/liberty.json',
     };
   }
 
-  String get _attribution {
-    return switch (mapStyle) {
-      MapStyle.satellite => 'Tiles © Esri',
-      MapStyle.roads => '© OpenStreetMap contributors',
-      MapStyle.traffic => _trafficTileTemplate.isEmpty
-          ? '© OpenStreetMap contributors'
-          : '© OpenStreetMap contributors · traffic provider',
-    };
+  String? get _mapLibreStyleString {
+    if (_styleAssetForString != _styleAsset) {
+      return null;
+    }
+    return _styleString;
   }
+
+  String get _webStyleUrl => 'assets/$_styleAsset';
+
+  double get _initialBearing => _effectiveMapStyle == MapStyle.threeD ? 35 : 0;
+
+  double get _initialTilt => _effectiveMapStyle == MapStyle.threeD ? 55 : 0;
 }
 
 class _SearchCard extends StatelessWidget {
@@ -2390,83 +2731,6 @@ class _NavigationStatus extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _MapPin extends StatelessWidget {
-  const _MapPin({required this.label, required this.color});
-
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: color,
-        shape: BoxShape.circle,
-        boxShadow: const [
-          BoxShadow(
-            blurRadius: 12,
-            offset: Offset(0, 4),
-            color: Color(0x33000000),
-          ),
-        ],
-      ),
-      child: Center(
-        child: Text(
-          label,
-          style: const TextStyle(
-            color: Colors.white,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CurrentLocationMarker extends StatelessWidget {
-  const _CurrentLocationMarker({
-    required this.heading,
-    required this.navigating,
-    required this.headingUp,
-  });
-
-  final double heading;
-  final bool navigating;
-  final bool headingUp;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final rotation =
-        heading.isFinite && heading >= 0 ? degreesToRadians(heading) : 0.0;
-
-    return Transform.rotate(
-      angle: headingUp ? 0 : rotation,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: scheme.primary,
-          shape: BoxShape.circle,
-          border: Border.all(color: scheme.surface, width: 3),
-          boxShadow: const [
-            BoxShadow(
-              blurRadius: 14,
-              offset: Offset(0, 4),
-              color: Color(0x33000000),
-            ),
-          ],
-        ),
-        child: Center(
-          child: Icon(
-            navigating ? Icons.navigation : Icons.my_location,
-            color: scheme.onPrimary,
-            size: 24,
-          ),
         ),
       ),
     );
