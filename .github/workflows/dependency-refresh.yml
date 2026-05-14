@@ -1,0 +1,91 @@
+name: Dependency refresh
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 10 * * 1"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    name: Update dependencies after successful checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 25
+          cache: npm
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install current Node dependencies
+        run: npm ci
+
+      - name: Install current Flutter dependencies
+        working-directory: apps/mobile
+        run: flutter pub get
+
+      - name: Refresh npm dependencies
+        run: npm update --workspaces
+
+      - name: Refresh Flutter dependencies
+        working-directory: apps/mobile
+        run: flutter pub upgrade --major-versions
+
+      - name: Verify Node workspace
+        run: |
+          npm run build
+          npm test
+
+      - name: Verify Flutter app
+        working-directory: apps/mobile
+        run: |
+          flutter analyze
+          flutter test
+          flutter build web
+
+      - name: Push refresh branch and open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: automation/dependency-refresh
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet -- package.json package-lock.json apps/mobile/pubspec.yaml; then
+            echo "No dependency changes to publish."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add package.json package-lock.json apps/mobile/pubspec.yaml
+          git commit -m "chore: refresh dependencies"
+          git push --force-with-lease origin "$BRANCH"
+
+          if gh pr view "$BRANCH" --base main >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" \
+              --base main \
+              --title "chore: refresh dependencies" \
+              --body "Automated dependency refresh. Node and Flutter builds/tests passed before this branch was pushed."
+          else
+            gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore: refresh dependencies" \
+              --body "Automated dependency refresh. Node and Flutter builds/tests passed before this branch was pushed."
+          fi

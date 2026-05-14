@@ -1,0 +1,78 @@
+name: Dependabot auto-merge
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  approve-and-merge:
+    name: Approve and merge green Dependabot PRs
+    runs-on: ubuntu-latest
+    if: github.actor == 'dependabot[bot]' && !github.event.pull_request.draft
+
+    steps:
+      - name: Wait for PR checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          saw_checks=false
+          for attempt in $(seq 1 80); do
+            runs="$(gh api "/repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+              --jq '.check_runs[]
+                | select(.name != "Approve and merge green Dependabot PRs")
+                | select(.name != "Dependabot auto-merge")
+                | [.name, .status, (.conclusion // "")]
+                | @tsv')"
+
+            if [ -n "$runs" ]; then
+              saw_checks=true
+            fi
+
+            failed="$(printf '%s\n' "$runs" | awk -F '\t' '$2 == "completed" && $3 != "success" && $3 != "skipped" && $3 != "neutral" { print }')"
+            pending="$(printf '%s\n' "$runs" | awk -F '\t' '$2 != "completed" { print }')"
+
+            if [ -n "$failed" ]; then
+              echo "At least one required dependency PR check failed:"
+              printf '%s\n' "$failed"
+              exit 1
+            fi
+
+            if [ "$saw_checks" = true ] && [ -z "$pending" ]; then
+              echo "All dependency PR checks completed successfully."
+              exit 0
+            fi
+
+            echo "Waiting for dependency PR checks to complete... attempt $attempt"
+            sleep 30
+          done
+
+          echo "Timed out waiting for dependency PR checks."
+          exit 1
+
+      - name: Approve Dependabot PR
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr review "$PR_NUMBER" --approve --body "Dependency update checks passed."
+
+      - name: Merge Dependabot PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr merge "$PR_NUMBER" --squash --delete-branch
