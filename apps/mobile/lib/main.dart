@@ -34,28 +34,26 @@ class _MotoPlannerAppState extends State<MotoPlannerApp> {
   Widget build(BuildContext context) {
     const fallbackSeed = Color(0xff1565c0);
 
-    return DynamicColorBuilder(
-      builder: (lightDynamic, darkDynamic) {
-        final lightScheme =
-            lightDynamic ?? ColorScheme.fromSeed(seedColor: fallbackSeed);
-        final darkScheme = darkDynamic ??
-            ColorScheme.fromSeed(
-              seedColor: fallbackSeed,
-              brightness: Brightness.dark,
-            );
-
-        return MaterialApp(
-          debugShowCheckedModeBanner: false,
-          title: 'MotoPlanner',
-          themeMode: _themeMode,
-          theme: ThemeData(useMaterial3: true, colorScheme: lightScheme),
-          darkTheme: ThemeData(useMaterial3: true, colorScheme: darkScheme),
-          home: PlannerHome(
-            themeMode: _themeMode,
-            onThemeModeChanged: (mode) => setState(() => _themeMode = mode),
-          ),
-        );
-      },
+    return MaterialApp(
+      key: ValueKey(_themeMode),
+      debugShowCheckedModeBanner: false,
+      title: 'MotoPlanner',
+      themeMode: _themeMode,
+      theme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(seedColor: fallbackSeed),
+      ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: fallbackSeed,
+          brightness: Brightness.dark,
+        ),
+      ),
+      home: PlannerHome(
+        themeMode: _themeMode,
+        onThemeModeChanged: (mode) => setState(() => _themeMode = mode),
+      ),
     );
   }
 }
@@ -149,6 +147,33 @@ class _PlannerHomeState extends State<PlannerHome> {
     unawaited(_loadDrawHelpPreference());
     unawaited(_centerOnCurrentLocation(setAsOrigin: true, quiet: true));
   }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateMapStyle();
+  }
+
+  void _updateMapStyle() {
+    final mode = widget.themeMode;
+    if (mode == ThemeMode.light) {
+      _mapStyle = MapStyle.bright;
+    } else if (mode == ThemeMode.dark) {
+      _mapStyle = MapStyle.fiord;
+    } else {
+      final brightness = MediaQuery.platformBrightnessOf(context);
+      _mapStyle =
+          brightness == Brightness.dark ? MapStyle.fiord : MapStyle.bright;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant PlannerHome oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.themeMode != widget.themeMode) {
+      _updateMapStyle();
+    }
+  }
 
   @override
   void dispose() {
@@ -190,11 +215,13 @@ class _PlannerHomeState extends State<PlannerHome> {
               for (final style in MapStyle.values)
                 PopupMenuItem(
                   value: style,
-                  child: ListTile(
-                    dense: true,
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(style.icon),
-                    title: Text(style.label),
+                  child: PointerInterceptor(
+                    child: ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(style.icon),
+                      title: Text(style.label),
+                    ),
                   ),
                 ),
             ],
@@ -209,10 +236,16 @@ class _PlannerHomeState extends State<PlannerHome> {
             icon: const Icon(Icons.contrast_outlined),
             initialValue: widget.themeMode,
             onSelected: widget.onThemeModeChanged,
-            itemBuilder: (context) => const [
-              PopupMenuItem(value: ThemeMode.system, child: Text('System')),
-              PopupMenuItem(value: ThemeMode.light, child: Text('Light')),
-              PopupMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                  value: ThemeMode.system,
+                  child: PointerInterceptor(child: const Text('System'))),
+              PopupMenuItem(
+                  value: ThemeMode.light,
+                  child: PointerInterceptor(child: const Text('Light'))),
+              PopupMenuItem(
+                  value: ThemeMode.dark,
+                  child: PointerInterceptor(child: const Text('Dark'))),
             ],
           ),
         ],
@@ -231,7 +264,7 @@ class _PlannerHomeState extends State<PlannerHome> {
                   shapingPoints: _shapingPoints,
                   route: _route,
                   mapStyle: _mapStyle,
-                  currentPosition: _currentPosition,
+                  currentPosition: _navigating ? _currentPosition : null,
                   loopCenter: _destination?.type == 'loop return'
                       ? _origin?.latLng
                       : null,
@@ -366,12 +399,10 @@ class _PlannerHomeState extends State<PlannerHome> {
                       onToggleDrawMode: _toggleDrawMode,
                       onBuildLoopRide: _origin == null ? null : _buildLoopRide,
                       onLoopTargetChanged: _updateLoopTarget,
-                      onUndoShapingPoint: _shapingPoints.isEmpty
-                          ? null
-                          : _undoLastShapingPoint,
-                      onClearShapingPoints: _shapingPoints.isEmpty
-                          ? null
-                          : _clearShapingPoints,
+                      onUndoShapingPoint:
+                          _shapingPoints.isEmpty ? null : _undoLastShapingPoint,
+                      onClearShapingPoints:
+                          _shapingPoints.isEmpty ? null : _clearShapingPoints,
                       onStartNavigation: _startNavigation,
                       onStopNavigation: _stopNavigation,
                       onSpeak: _speakNextDirection,
@@ -460,9 +491,10 @@ class _PlannerHomeState extends State<PlannerHome> {
 
     final neverShowAgain = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        icon: const Icon(Icons.draw_outlined),
-        title: const Text('Draw a route'),
+      builder: (context) => PointerInterceptor(
+        child: AlertDialog(
+          icon: const Icon(Icons.draw_outlined),
+          title: const Text('Draw a route'),
         content: const Text(
           'Tap the map to add route-shaping points. Tap a numbered point again to remove it. Use Loop to draft a round trip, then adjust the points until the ride feels right.',
         ),
@@ -476,6 +508,7 @@ class _PlannerHomeState extends State<PlannerHome> {
             child: const Text('Got it'),
           ),
         ],
+      ),
       ),
     );
 
@@ -640,10 +673,15 @@ class _PlannerHomeState extends State<PlannerHome> {
         _originController.text = 'Dropped start';
         _searchTarget = SearchTarget.destination;
         _shapingPoints.clear();
-      } else if (_destination == null) {
+      } else if (_destination == null && _routeBuildMode != RouteBuildMode.draw) {
         _destination = place;
         _destinationController.text = 'Dropped destination';
       } else {
+        if (_destination == null && _routeBuildMode == RouteBuildMode.draw) {
+          _showNotice('Set a destination via the search box before drawing shaping points.', tone: _NoticeTone.info);
+          _programmaticTextEdit = false;
+          return;
+        }
         _shapingPoints.add(
           PlaceResult(
             name: _routeBuildMode == RouteBuildMode.draw
@@ -1778,6 +1816,7 @@ class _PlannerMapState extends State<_PlannerMap> {
     final controller = _controller;
     if (controller != null) {
       controller.onSymbolTapped.remove(_handleSymbolTap);
+      controller.onCircleTapped.remove(_handleCircleTap);
       widget.controller.detach(controller);
     }
     super.dispose();
@@ -1794,7 +1833,6 @@ class _PlannerMapState extends State<_PlannerMap> {
       );
     }
     return ml.MapLibreMap(
-      key: ValueKey(_styleAsset),
       initialCameraPosition: ml.CameraPosition(
         target: _toMapLibre(widget.controller.camera.center),
         zoom: widget.controller.camera.zoom,
@@ -1806,7 +1844,8 @@ class _PlannerMapState extends State<_PlannerMap> {
       trackCameraPosition: true,
       compassEnabled: false,
       attributionButtonPosition: ml.AttributionButtonPosition.bottomRight,
-      attributionButtonMargins: const math.Point(8, 8),
+      attributionButtonMargins:
+          kIsWeb ? null : const math.Point<num>(8, 8) as math.Point<double>,
       onMapCreated: _onMapCreated,
       onStyleLoadedCallback: _onStyleLoaded,
       onMapClick: _handleMapClick,
@@ -1850,19 +1889,37 @@ class _PlannerMapState extends State<_PlannerMap> {
     _controller = controller;
     widget.controller.attach(controller);
     controller.onSymbolTapped.add(_handleSymbolTap);
+    controller.onCircleTapped.add(_handleCircleTap);
   }
 
   void _onStyleLoaded() {
     _loadedStyle = _effectiveMapStyle;
     _lastAnnotationKey = null;
+
+    final symbolIds = _controller?.symbolManager?.layerIds;
+    if (symbolIds != null) {
+      for (final layerId in symbolIds) {
+        _controller?.setLayerProperties(
+            layerId, const ml.SymbolLayerProperties(textFont: ['Noto Sans Bold']));
+      }
+    }
+
     _refreshAnnotationsIfNeeded();
   }
 
   void _handleSymbolTap(ml.Symbol symbol) {
     _ignoreNextMapClick = true;
     final index = symbol.data?['shapingIndex'];
-    if (index is int) {
-      widget.onRemoveShapingPoint(index);
+    if (index is num) {
+      widget.onRemoveShapingPoint(index.toInt());
+    }
+  }
+
+  void _handleCircleTap(ml.Circle circle) {
+    _ignoreNextMapClick = true;
+    final index = circle.data?['shapingIndex'];
+    if (index is num) {
+      widget.onRemoveShapingPoint(index.toInt());
     }
   }
 
@@ -1920,6 +1977,9 @@ class _PlannerMapState extends State<_PlannerMap> {
           lineColor: _hex(scheme.primary),
           lineOpacity: 0.64,
           lineWidth: 2,
+          lineGapWidth: 0,
+          lineOffset: 0,
+          lineBlur: 0,
         ),
       );
     }
@@ -1933,6 +1993,10 @@ class _PlannerMapState extends State<_PlannerMap> {
           lineColor: _hex(scheme.surface),
           lineWidth: 9,
           lineJoin: 'round',
+          lineOpacity: 1,
+          lineGapWidth: 0,
+          lineOffset: 0,
+          lineBlur: 0,
         ),
       );
       await controller.addLine(
@@ -1941,6 +2005,10 @@ class _PlannerMapState extends State<_PlannerMap> {
           lineColor: _hex(scheme.primary),
           lineWidth: 6,
           lineJoin: 'round',
+          lineOpacity: 1,
+          lineGapWidth: 0,
+          lineOffset: 0,
+          lineBlur: 0,
         ),
       );
     }
@@ -1996,6 +2064,9 @@ class _PlannerMapState extends State<_PlannerMap> {
         circleColor: _hex(color),
         circleStrokeColor: '#ffffff',
         circleStrokeWidth: 2,
+        circleBlur: 0,
+        circleOpacity: 1,
+        circleStrokeOpacity: 1,
       ),
       data,
     );
@@ -2003,14 +2074,24 @@ class _PlannerMapState extends State<_PlannerMap> {
       ml.SymbolOptions(
         geometry: _toMapLibre(point),
         textField: label,
+        fontNames: const ['Noto Sans Bold'],
         textSize: size,
         textColor: '#ffffff',
         textHaloColor: _hex(color),
         textHaloWidth: 1,
         textRotate: rotate,
         zIndex: 10,
+        iconSize: 1,
+        iconRotate: 0,
+        iconOpacity: 1,
+        iconHaloWidth: 0,
+        iconHaloBlur: 0,
+        textOpacity: 1,
+        textHaloBlur: 0,
+        textMaxWidth: 10,
+        textLetterSpacing: 0,
       ),
-      data,
+      {...?data, 'zIndex': 10},
     );
   }
 

@@ -16,7 +16,7 @@ dependencies:
   go_router: ^17.2.3
   latlong2: ^0.9.1
   sqflite_sqlcipher: ^3.2.0
-  maplibre_gl: ^0.22.0
+  maplibre_gl: ^0.26.1
   http: ^1.6.0
   dynamic_color: ^1.8.1
   pointer_interceptor: 0.10.1+2
