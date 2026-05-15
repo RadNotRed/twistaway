@@ -14,7 +14,7 @@ MotoPlanner is a privacy-first motorcycle route planner for Android, iPhone, and
 
 - Git
 - Node.js 25 or newer
-- npm 11 or newer, normally bundled with Node.js 25
+- Bun
 - Flutter stable with Dart 3.5 or newer
 - Platform tooling for the mobile targets you want to run:
   - Android Studio, Android SDK, and an emulator or device for Android
@@ -25,7 +25,7 @@ Check your local toolchain:
 
 ```bash
 node --version
-npm --version
+bun --version
 flutter doctor
 ```
 
@@ -34,7 +34,7 @@ flutter doctor
 Install the Node workspace dependencies from the repository root:
 
 ```bash
-npm install
+bun install
 ```
 
 Install the Flutter app dependencies:
@@ -49,13 +49,13 @@ flutter pub get
 Run the API from the repository root:
 
 ```bash
-npm run dev:api
+bun run dev:api
 ```
 
 Run the website from the repository root:
 
 ```bash
-npm run dev:web
+bun run dev:web
 ```
 
 Run the mobile app:
@@ -77,7 +77,7 @@ flutter run -d chrome
 Build the Node workspace:
 
 ```bash
-npm run build
+bun run build
 ```
 
 Build the Flutter web app:
@@ -92,7 +92,7 @@ flutter build web
 Run Node workspace tests:
 
 ```bash
-npm test
+bun run test
 ```
 
 Run Flutter static analysis and tests:
@@ -107,10 +107,10 @@ flutter test
 
 The repository includes:
 
-- `Node CI`: installs dependencies with `npm ci`, builds the Node workspace, and runs Node tests.
+- `Node CI`: installs dependencies with `bun install --frozen-lockfile`, builds the Node workspace, and runs Node tests.
 - `Flutter CI`: installs Flutter dependencies, runs `flutter analyze`, runs `flutter test`, and builds the Flutter web target.
 - `CodeQL`: scans the JavaScript and TypeScript code for security issues on pushes, pull requests, and a weekly schedule.
-- Dependabot configuration for weekly npm and Flutter dependency updates.
+- Dependabot configuration for weekly Bun and Flutter dependency updates.
 
 Both CI workflows run on pushes and pull requests targeting `main`.
 

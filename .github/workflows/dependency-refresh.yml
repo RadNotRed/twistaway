@@ -20,11 +20,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v5
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: 25
-          cache: npm
+          bun-version: latest
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
@@ -33,14 +32,14 @@ jobs:
           cache: true
 
       - name: Install current Node dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Install current Flutter dependencies
         working-directory: apps/mobile
         run: flutter pub get
 
-      - name: Refresh npm dependencies
-        run: npm update --workspaces
+      - name: Refresh Bun dependencies
+        run: bun update
 
       - name: Refresh Flutter dependencies
         working-directory: apps/mobile
@@ -48,8 +47,8 @@ jobs:
 
       - name: Verify Node workspace
         run: |
-          npm run build
-          npm test
+          bun run build
+          bun run test
 
       - name: Verify Flutter app
         working-directory: apps/mobile
@@ -65,7 +64,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git diff --quiet -- package.json package-lock.json apps/mobile/pubspec.yaml; then
+          if git diff --quiet -- package.json bun.lock apps/mobile/pubspec.yaml; then
             echo "No dependency changes to publish."
             exit 0
           fi
@@ -73,7 +72,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add package.json package-lock.json apps/mobile/pubspec.yaml
+          git add package.json bun.lock apps/mobile/pubspec.yaml
           git commit -m "chore: refresh dependencies"
           git push --force-with-lease origin "$BRANCH"
 
