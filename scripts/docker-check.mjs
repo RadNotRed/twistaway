@@ -1,7 +1,9 @@
-const secret = "local-compose-validation-only";
+const secret = "local-compose-validation-only-32-bytes";
+const corsOrigin = "https://twistaway.invalid";
 const env = {
   ...process.env,
   APP_ENCRYPTION_SECRET: secret,
+  CORS_ORIGINS: corsOrigin,
   CLOUDFLARE_TUNNEL_TOKEN: "validation-placeholder",
 };
 
@@ -51,6 +53,8 @@ try {
     "no-new-privileges:true",
     "--env",
     `APP_ENCRYPTION_SECRET=${secret}`,
+    "--env",
+    `CORS_ORIGINS=${corsOrigin}`,
     "twistaway-api:check",
   ]);
 
