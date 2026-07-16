@@ -1,0 +1,56 @@
+name: 🐛 Bug report
+description: Report a reproducible Twistaway problem
+title: "🐛 fix: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value:
+        Thanks for helping improve Twistaway. Remove private locations, credentials, and
+        tokens before submitting.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - iOS
+        - Flutter web
+        - Windows
+        - API
+        - Website or documentation
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include the expected behavior and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open…
+        2. Tap…
+        3. Observe…
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Redact precise locations, account information, and secrets.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed private locations, credentials, tokens, and personal data.
+          required: true

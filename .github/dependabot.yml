@@ -4,16 +4,34 @@ updates:
     directory: /
     schedule:
       interval: weekly
+      day: monday
     groups:
       node-dependencies:
-        patterns:
-          - "*"
+        patterns: ["*"]
 
   - package-ecosystem: pub
     directory: /apps/mobile
     schedule:
       interval: weekly
+      day: monday
     groups:
       flutter-dependencies:
-        patterns:
-          - "*"
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      documentation:
+        patterns: ["*"]

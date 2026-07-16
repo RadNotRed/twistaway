@@ -18,12 +18,10 @@ jobs:
   approve-and-merge:
     name: Approve and merge green Dependabot PRs
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     if: github.actor == 'dependabot[bot]' && !github.event.pull_request.draft
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Wait for PR checks
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,7 +71,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr review "$PR_NUMBER" --approve --body "Dependency update checks passed."
+        run:
+          gh pr review "$PR_NUMBER" --approve --body "Dependency update checks passed."
 
       - name: Merge Dependabot PR
         env:

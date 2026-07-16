@@ -16,20 +16,28 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.14
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
 
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: 3.44.6
           channel: stable
           cache: true
+          pub-cache: true
 
       - name: Install current Node dependencies
         run: bun install --frozen-lockfile
@@ -53,9 +61,10 @@ jobs:
       - name: Verify Flutter app
         working-directory: apps/mobile
         run: |
+          dart format --output=none --set-exit-if-changed lib test
           flutter analyze
           flutter test
-          flutter build web
+          flutter build web --release --no-pub --no-wasm-dry-run
 
       - name: Push refresh branch and open PR
         env:
@@ -64,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if git diff --quiet -- package.json bun.lock apps/mobile/pubspec.yaml; then
+          if git diff --quiet -- package.json apps/api/package.json apps/web/package.json packages/shared/package.json bun.lock apps/mobile/pubspec.yaml apps/mobile/pubspec.lock requirements-docs.txt; then
             echo "No dependency changes to publish."
             exit 0
           fi
@@ -72,19 +81,19 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$BRANCH"
-          git add package.json bun.lock apps/mobile/pubspec.yaml
-          git commit -m "chore: refresh dependencies"
+          git add package.json apps/api/package.json apps/web/package.json packages/shared/package.json bun.lock apps/mobile/pubspec.yaml apps/mobile/pubspec.lock requirements-docs.txt
+          git commit -m "🔧 chore(deps): refresh dependencies"
           git push --force-with-lease origin "$BRANCH"
 
           if gh pr view "$BRANCH" --base main >/dev/null 2>&1; then
             gh pr edit "$BRANCH" \
               --base main \
-              --title "chore: refresh dependencies" \
+              --title "🔧 chore(deps): refresh dependencies" \
               --body "Automated dependency refresh. Node and Flutter builds/tests passed before this branch was pushed."
           else
             gh pr create \
               --base main \
               --head "$BRANCH" \
-              --title "chore: refresh dependencies" \
+              --title "🔧 chore(deps): refresh dependencies" \
               --body "Automated dependency refresh. Node and Flutter builds/tests passed before this branch was pushed."
           fi

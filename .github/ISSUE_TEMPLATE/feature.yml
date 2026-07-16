@@ -1,0 +1,33 @@
+name: ✨ Feature request
+description: Propose a rider-focused improvement
+title: "✨ feat: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Rider problem
+      description:
+        What riding, planning, navigation, privacy, or accessibility problem should this
+        solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed experience
+      description: Describe the behavior rather than only the visual control.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Product constraints
+      options:
+        - label: This can remain usable without distracting the rider.
+        - label: This has a graceful offline or provider-failure behavior.
+        - label: This does not require committing a mobile client secret.
