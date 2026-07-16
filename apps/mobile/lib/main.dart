@@ -16,6 +16,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'features/planner/place_search_service.dart';
 import 'features/planner/planner_models.dart';
 import 'features/planner/routing_service.dart';
+import 'features/planner/service_connection_mode.dart';
 import 'integrations/spotify_service.dart';
 
 void main() {
@@ -152,6 +153,7 @@ class _PlannerHomeState extends State<PlannerHome> {
   static const _voiceEnabledKey = 'settings.voiceEnabled';
   static const _voiceVolumeKey = 'settings.voiceVolume';
   static const _voiceKey = 'settings.voice';
+  static const _serviceConnectionModeKey = 'settings.serviceConnectionMode';
 
   final _mapController = _PlannerMapController(
     center: _defaultCenter,
@@ -188,6 +190,9 @@ class _PlannerHomeState extends State<PlannerHome> {
   double _voiceVolume = 0.8;
   double _loopTargetMiles = 35;
   RouteBuildMode _routeBuildMode = RouteBuildMode.normal;
+  ServiceConnectionMode _serviceConnectionMode = kDebugMode
+      ? ServiceConnectionMode.directProviders
+      : ServiceConnectionMode.automatic;
 
   SearchTarget _searchTarget = SearchTarget.destination;
   MapStyle _mapStyle = MapStyle.bright;
@@ -258,6 +263,7 @@ class _PlannerHomeState extends State<PlannerHome> {
         _storage.read(key: _voiceEnabledKey),
         _storage.read(key: _voiceVolumeKey),
         _storage.read(key: _voiceKey),
+        _storage.read(key: _serviceConnectionModeKey),
       ]);
       if (!mounted) return;
 
@@ -271,6 +277,15 @@ class _PlannerHomeState extends State<PlannerHome> {
         (avatar) => avatar.name == values[2],
       );
       final volume = double.tryParse(values[4] ?? '');
+      final savedConnectionModes = ServiceConnectionMode.values.where(
+        (mode) => mode.name == values[6],
+      );
+      final connectionMode = savedConnectionModes.isEmpty
+          ? _serviceConnectionMode
+          : savedConnectionModes.first;
+
+      _placeSearch.connectionMode = connectionMode;
+      _routing.connectionMode = connectionMode;
 
       setState(() {
         if (savedStyle.isNotEmpty) {
@@ -281,6 +296,7 @@ class _PlannerHomeState extends State<PlannerHome> {
         _voiceGuidanceEnabled = values[3] != 'false';
         _voiceVolume = (volume ?? 0.8).clamp(0, 1).toDouble();
         _selectedVoiceId = values[5];
+        _serviceConnectionMode = connectionMode;
       });
       if (savedTheme.isNotEmpty && savedTheme.first != widget.themeMode) {
         widget.onThemeModeChanged(savedTheme.first);
@@ -1045,12 +1061,14 @@ class _PlannerHomeState extends State<PlannerHome> {
           rideFocus: _rideFocus,
           savedRouteCount: _savedRoutes.length,
           spotifyConnected: _spotify.state.connected,
+          serviceConnectionMode: _serviceConnectionMode,
           onThemeModeChanged: _setThemeMode,
           onMapStyleChanged: _setMapStyle,
           onRiderAvatarChanged: _setRiderAvatar,
           onVoiceGuidanceChanged: _setVoiceGuidanceEnabled,
           onVoiceVolumeChanged: _setVoiceVolume,
           onVoiceChanged: _setVoice,
+          onServiceConnectionModeChanged: _setServiceConnectionMode,
           onTestVoice: () => _speak(
             'Voice guidance is ready. Have a safe ride.',
             force: true,
@@ -1087,6 +1105,15 @@ class _PlannerHomeState extends State<PlannerHome> {
   void _setRiderAvatar(_RiderAvatar avatar) {
     setState(() => _riderAvatar = avatar);
     unawaited(_storage.write(key: _avatarKey, value: avatar.name));
+  }
+
+  void _setServiceConnectionMode(ServiceConnectionMode mode) {
+    setState(() => _serviceConnectionMode = mode);
+    _placeSearch.connectionMode = mode;
+    _routing.connectionMode = mode;
+    unawaited(
+      _storage.write(key: _serviceConnectionModeKey, value: mode.name),
+    );
   }
 
   Future<void> _refreshVoices() async {
@@ -3745,12 +3772,14 @@ class _SettingsScreen extends StatefulWidget {
     required this.rideFocus,
     required this.savedRouteCount,
     required this.spotifyConnected,
+    required this.serviceConnectionMode,
     required this.onThemeModeChanged,
     required this.onMapStyleChanged,
     required this.onRiderAvatarChanged,
     required this.onVoiceGuidanceChanged,
     required this.onVoiceVolumeChanged,
     required this.onVoiceChanged,
+    required this.onServiceConnectionModeChanged,
     required this.onTestVoice,
     required this.onPreferenceChanged,
     required this.onRideFocusChanged,
@@ -3773,12 +3802,14 @@ class _SettingsScreen extends StatefulWidget {
   final String rideFocus;
   final int savedRouteCount;
   final bool spotifyConnected;
+  final ServiceConnectionMode serviceConnectionMode;
   final ValueChanged<ThemeMode> onThemeModeChanged;
   final ValueChanged<MapStyle> onMapStyleChanged;
   final ValueChanged<_RiderAvatar> onRiderAvatarChanged;
   final ValueChanged<bool> onVoiceGuidanceChanged;
   final ValueChanged<double> onVoiceVolumeChanged;
   final ValueChanged<String?> onVoiceChanged;
+  final ValueChanged<ServiceConnectionMode> onServiceConnectionModeChanged;
   final VoidCallback onTestVoice;
   final List<RoutePreference> Function(String key, double value)
       onPreferenceChanged;
@@ -3805,6 +3836,7 @@ class _SettingsScreenState extends State<_SettingsScreen> {
   late String _rideFocus;
   late int _savedRouteCount;
   late bool _spotifyConnected;
+  late ServiceConnectionMode _serviceConnectionMode;
   bool _spotifyBusy = false;
 
   @override
@@ -3824,6 +3856,7 @@ class _SettingsScreenState extends State<_SettingsScreen> {
     _rideFocus = widget.rideFocus;
     _savedRouteCount = widget.savedRouteCount;
     _spotifyConnected = widget.spotifyConnected;
+    _serviceConnectionMode = widget.serviceConnectionMode;
   }
 
   @override
@@ -4181,6 +4214,35 @@ class _SettingsScreenState extends State<_SettingsScreen> {
       title: 'Ride preferences',
       icon: Icons.route_outlined,
       children: [
+        Text('Route processing',
+            style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<ServiceConnectionMode>(
+          key: const ValueKey('service-connection-mode'),
+          initialValue: _serviceConnectionMode,
+          isExpanded: true,
+          decoration: const InputDecoration(
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.cloud_sync_outlined),
+          ),
+          items: [
+            for (final mode in ServiceConnectionMode.values)
+              DropdownMenuItem(value: mode, child: Text(mode.label)),
+          ],
+          onChanged: (mode) {
+            if (mode == null) return;
+            setState(() => _serviceConnectionMode = mode);
+            widget.onServiceConnectionModeChanged(mode);
+          },
+        ),
+        const SizedBox(height: 8),
+        Text(_serviceConnectionMode.description),
+        const SizedBox(height: 6),
+        Text(
+          'Direct providers still need internet access. Fully offline routing requires downloaded road data and is not available yet.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const Divider(height: 28),
         Wrap(
           spacing: 8,
           runSpacing: 8,

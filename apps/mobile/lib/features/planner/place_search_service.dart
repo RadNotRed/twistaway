@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../../core/cache/expiring_lru_cache.dart';
+import 'service_connection_mode.dart';
 
 class PlaceResult {
   const PlaceResult({
@@ -55,6 +56,7 @@ class PlaceSearchService {
       'TWISTAWAY_API_BASE_URL',
       defaultValue: 'http://localhost:4180',
     ),
+    ServiceConnectionMode? connectionMode,
     bool? useDirectProviders,
   })  : _client = client ?? http.Client(),
         _cache = cache ??
@@ -63,15 +65,24 @@ class PlaceSearchService {
               timeToLive: const Duration(minutes: 10),
             ),
         _apiBaseUrl = apiBaseUrl,
-        _useDirectProviders = useDirectProviders ??
-            (kDebugMode ||
-                const bool.fromEnvironment('TWISTAWAY_DIRECT_MAP_SERVICES'));
+        connectionMode = connectionMode ??
+            (useDirectProviders != null
+                ? useDirectProviders
+                    ? ServiceConnectionMode.directProviders
+                    : ServiceConnectionMode.apiOnly
+                : kDebugMode ||
+                        const bool.fromEnvironment(
+                          'TWISTAWAY_DIRECT_MAP_SERVICES',
+                        )
+                    ? ServiceConnectionMode.directProviders
+                    : ServiceConnectionMode.automatic);
 
   final http.Client _client;
   final String _apiBaseUrl;
-  final bool _useDirectProviders;
+  ServiceConnectionMode connectionMode;
   final ExpiringLruCache<String, List<PlaceResult>> _cache;
   final Map<String, Future<List<PlaceResult>>> _inFlight = {};
+  DateTime? _apiUnavailableUntil;
 
   Future<List<PlaceResult>> search(String query,
       {SearchContext? context}) async {
@@ -84,7 +95,7 @@ class PlaceSearchService {
       'q': trimmed,
       ...?context?.toQueryParameters(),
     };
-    final cacheKey = _cacheKey(queryParameters);
+    final cacheKey = '${connectionMode.name}|${_cacheKey(queryParameters)}';
     final cached = _cache.get(cacheKey);
     if (cached != null) {
       return cached;
@@ -108,9 +119,38 @@ class PlaceSearchService {
     Map<String, String> queryParameters,
     String cacheKey,
   ) async {
-    if (_useDirectProviders) {
+    return switch (connectionMode) {
+      ServiceConnectionMode.apiOnly =>
+        _fetchApiPlaces(queryParameters, cacheKey),
+      ServiceConnectionMode.directProviders =>
+        _fetchPhotonPlaces(queryParameters, cacheKey),
+      ServiceConnectionMode.automatic =>
+        _fetchPlacesWithFallback(queryParameters, cacheKey),
+    };
+  }
+
+  Future<List<PlaceResult>> _fetchPlacesWithFallback(
+    Map<String, String> queryParameters,
+    String cacheKey,
+  ) async {
+    final unavailableUntil = _apiUnavailableUntil;
+    if (unavailableUntil != null && unavailableUntil.isAfter(DateTime.now())) {
       return _fetchPhotonPlaces(queryParameters, cacheKey);
     }
+    try {
+      final places = await _fetchApiPlaces(queryParameters, cacheKey);
+      _apiUnavailableUntil = null;
+      return places;
+    } catch (_) {
+      _apiUnavailableUntil = DateTime.now().add(const Duration(minutes: 2));
+      return _fetchPhotonPlaces(queryParameters, cacheKey);
+    }
+  }
+
+  Future<List<PlaceResult>> _fetchApiPlaces(
+    Map<String, String> queryParameters,
+    String cacheKey,
+  ) async {
     final response = await _client
         .get(
           Uri.parse('$_apiBaseUrl/integrations/search').replace(

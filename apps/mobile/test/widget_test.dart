@@ -115,6 +115,9 @@ void main() {
     expect(find.text('Map & appearance'), findsOneWidget);
     expect(find.text('Navigation voice'), findsOneWidget);
     expect(find.text('Spoken directions'), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('service-connection-mode')), findsOneWidget);
+    expect(find.text('Route processing'), findsOneWidget);
 
     await tester.tap(find.text('Red bike'));
     await tester.pump();

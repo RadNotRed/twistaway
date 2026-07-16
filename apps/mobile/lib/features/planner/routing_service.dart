@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 import '../../core/cache/expiring_lru_cache.dart';
+import 'service_connection_mode.dart';
 
 class PlannedRoute {
   const PlannedRoute({
@@ -42,6 +43,7 @@ class RoutingService {
       'TWISTAWAY_API_BASE_URL',
       defaultValue: 'http://localhost:4180',
     ),
+    ServiceConnectionMode? connectionMode,
     bool? useDirectProviders,
   })  : _client = client ?? http.Client(),
         _cache = cache ??
@@ -50,15 +52,24 @@ class RoutingService {
               timeToLive: const Duration(minutes: 10),
             ),
         _apiBaseUrl = apiBaseUrl,
-        _useDirectProviders = useDirectProviders ??
-            (kDebugMode ||
-                const bool.fromEnvironment('TWISTAWAY_DIRECT_MAP_SERVICES'));
+        connectionMode = connectionMode ??
+            (useDirectProviders != null
+                ? useDirectProviders
+                    ? ServiceConnectionMode.directProviders
+                    : ServiceConnectionMode.apiOnly
+                : kDebugMode ||
+                        const bool.fromEnvironment(
+                          'TWISTAWAY_DIRECT_MAP_SERVICES',
+                        )
+                    ? ServiceConnectionMode.directProviders
+                    : ServiceConnectionMode.automatic);
 
   final http.Client _client;
   final ExpiringLruCache<String, PlannedRoute> _cache;
   final Map<String, Future<PlannedRoute>> _inFlight = {};
   final String _apiBaseUrl;
-  final bool _useDirectProviders;
+  ServiceConnectionMode connectionMode;
+  DateTime? _apiUnavailableUntil;
 
   Future<PlannedRoute> route({
     required LatLng origin,
@@ -66,7 +77,7 @@ class RoutingService {
     List<LatLng> shapingPoints = const [],
     required Map<String, double> preferences,
   }) async {
-    final uri = Uri.parse('$_apiBaseUrl/integrations/route').replace(
+    final apiUri = Uri.parse('$_apiBaseUrl/integrations/route').replace(
       queryParameters: {
         'originLat': origin.latitude.toString(),
         'originLng': origin.longitude.toString(),
@@ -90,8 +101,7 @@ class RoutingService {
       shapingPoints: shapingPoints,
       preferences: preferences,
     );
-    final requestUri = _useDirectProviders ? directUri : uri;
-    final cacheKey = requestUri.toString();
+    final cacheKey = '${connectionMode.name}|$apiUri';
     final cached = _cache.get(cacheKey);
     if (cached != null) {
       return cached;
@@ -102,7 +112,7 @@ class RoutingService {
       return pending;
     }
 
-    final request = _fetchRoute(requestUri, cacheKey);
+    final request = _fetchRoute(apiUri, directUri, cacheKey);
     _inFlight[cacheKey] = request;
     try {
       return await request;
@@ -111,7 +121,57 @@ class RoutingService {
     }
   }
 
-  Future<PlannedRoute> _fetchRoute(Uri uri, String cacheKey) async {
+  Future<PlannedRoute> _fetchRoute(
+    Uri apiUri,
+    Uri directUri,
+    String cacheKey,
+  ) async {
+    final route = switch (connectionMode) {
+      ServiceConnectionMode.apiOnly => _requestRoute(apiUri),
+      ServiceConnectionMode.directProviders => _requestRoute(directUri),
+      ServiceConnectionMode.automatic => _requestRouteWithFallback(
+          apiUri,
+          directUri,
+        ),
+    };
+    final plannedRoute = await route;
+    _cache.put(cacheKey, plannedRoute);
+    return plannedRoute;
+  }
+
+  Future<PlannedRoute> _requestRouteWithFallback(
+    Uri apiUri,
+    Uri directUri,
+  ) async {
+    final unavailableUntil = _apiUnavailableUntil;
+    if (unavailableUntil != null && unavailableUntil.isAfter(DateTime.now())) {
+      return _directFallbackRoute(directUri);
+    }
+    try {
+      final route = await _requestRoute(apiUri);
+      _apiUnavailableUntil = null;
+      return route;
+    } catch (_) {
+      _apiUnavailableUntil = DateTime.now().add(const Duration(minutes: 2));
+      return _directFallbackRoute(directUri);
+    }
+  }
+
+  Future<PlannedRoute> _directFallbackRoute(Uri directUri) async {
+    final directRoute = await _requestRoute(directUri);
+    return PlannedRoute(
+      points: directRoute.points,
+      distanceMeters: directRoute.distanceMeters,
+      durationSeconds: directRoute.durationSeconds,
+      steps: directRoute.steps,
+      plannerNotes: [
+        ...directRoute.plannerNotes,
+        'Twistaway API unavailable; used the direct routing provider.',
+      ],
+    );
+  }
+
+  Future<PlannedRoute> _requestRoute(Uri uri) async {
     final direct = uri.host == 'router.project-osrm.org';
     var response = await _client
         .get(
@@ -151,9 +211,7 @@ class RoutingService {
       throw Exception('Routing failed: ${decoded['code']}');
     }
 
-    final route = _plannedRouteFromOsrm(decoded);
-    _cache.put(cacheKey, route);
-    return route;
+    return _plannedRouteFromOsrm(decoded);
   }
 
   PlannedRoute _plannedRouteFromOsrm(Map<String, dynamic> decoded) {
