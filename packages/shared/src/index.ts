@@ -45,5 +45,5 @@ export const defaultRoutePreferences: RoutePreferences = {
   restStops: true,
   weatherAware: true,
   trafficAware: true,
-  policeReports: false
+  policeReports: false,
 };

@@ -1,5 +1,5 @@
 {
-  "name": "@motoplanner/api",
+  "name": "@twistaway/api",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@motoplanner/shared": "0.1.0",
+    "@twistaway/shared": "0.1.0",
     "argon2": "^0.44.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",

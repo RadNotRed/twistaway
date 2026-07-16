@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Twistaway (Android emulator)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/mobile",
+      "program": "${workspaceFolder}/apps/mobile/lib/main.dart",
+      "flutterMode": "debug",
+      "deviceId": "emulator-5554",
+      "preLaunchTask": "Twistaway: Start Android emulator"
+    },
+    {
+      "name": "Twistaway (selected device)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "${workspaceFolder}/apps/mobile",
+      "program": "${workspaceFolder}/apps/mobile/lib/main.dart",
+      "flutterMode": "debug"
+    }
+  ]
+}

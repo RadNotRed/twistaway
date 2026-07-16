@@ -1,15 +1,21 @@
 import argon2 from "argon2";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { EncryptedPayload } from "@motoplanner/shared";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  timingSafeEqual,
+} from "node:crypto";
+import type { EncryptedPayload } from "@twistaway/shared";
 
-const AAD = Buffer.from("motoplanner-api-v1");
+const AAD = Buffer.from("twistaway-api-v1");
 
 export async function hashPassword(password: string): Promise<string> {
   return argon2.hash(password, {
     type: argon2.argon2id,
     memoryCost: 65536,
     timeCost: 3,
-    parallelism: 1
+    parallelism: 1,
   });
 }
 
@@ -39,13 +45,17 @@ export function serverKey(secret: string): Buffer {
   return createHash("sha256").update(secret).digest();
 }
 
-export function sealJsonWithKey(value: unknown, key: Buffer, aad = AAD): EncryptedPayload {
+export function sealJsonWithKey(
+  value: unknown,
+  key: Buffer,
+  aad = AAD,
+): EncryptedPayload {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
   cipher.setAAD(aad);
   const ciphertext = Buffer.concat([
     cipher.update(JSON.stringify(value), "utf8"),
-    cipher.final()
+    cipher.final(),
   ]);
 
   return {
@@ -55,22 +65,26 @@ export function sealJsonWithKey(value: unknown, key: Buffer, aad = AAD): Encrypt
     ciphertext: ciphertext.toString("base64url"),
     tag: cipher.getAuthTag().toString("base64url"),
     aad: aad.toString("base64url"),
-    keyDerivation: "argon2id-hkdf-sha256"
+    keyDerivation: "argon2id-hkdf-sha256",
   };
 }
 
-export function openJsonWithKey<T>(payload: EncryptedPayload, key: Buffer, aad = AAD): T {
+export function openJsonWithKey<T>(
+  payload: EncryptedPayload,
+  key: Buffer,
+  aad = AAD,
+): T {
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
-    Buffer.from(payload.nonce, "base64url")
+    Buffer.from(payload.nonce, "base64url"),
   );
   decipher.setAAD(aad);
   decipher.setAuthTag(Buffer.from(payload.tag, "base64url"));
 
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(payload.ciphertext, "base64url")),
-    decipher.final()
+    decipher.final(),
   ]);
 
   return JSON.parse(plaintext.toString("utf8")) as T;
@@ -85,11 +99,17 @@ export function wrapAuditKey(auditKeyBase64: string, secret: string): EncryptedP
   return sealJsonWithKey({ key: auditKeyBase64 }, serverKey(secret));
 }
 
-export function unwrapAuditKey(envelopeJson: string | null | undefined, secret: string): Buffer | null {
+export function unwrapAuditKey(
+  envelopeJson: string | null | undefined,
+  secret: string,
+): Buffer | null {
   if (!envelopeJson) {
     return null;
   }
 
-  const opened = openJsonWithKey<{ key: string }>(JSON.parse(envelopeJson), serverKey(secret));
+  const opened = openJsonWithKey<{ key: string }>(
+    JSON.parse(envelopeJson),
+    serverKey(secret),
+  );
   return Buffer.from(opened.key, "base64");
 }

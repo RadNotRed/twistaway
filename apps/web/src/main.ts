@@ -8,9 +8,9 @@ if (!app) {
 
 app.innerHTML = `
   <header class="topbar">
-    <a class="brand" href="#home" aria-label="MotoPlanner home">
+    <a class="brand" href="#home" aria-label="Twistaway home">
       <span class="brand-mark"></span>
-      <span>MotoPlanner</span>
+      <span>Twistaway</span>
     </a>
     <nav aria-label="Primary navigation">
       <a href="#features">Features</a>
@@ -23,7 +23,7 @@ app.innerHTML = `
     <section class="hero">
       <div class="hero-copy">
         <p class="eyebrow">Android, iPhone, offline-ready</p>
-        <h1>MotoPlanner</h1>
+        <h1>Twistaway</h1>
         <p>
           A motorcycle route planner for riders who care about curves, scenery,
           weather windows, traffic reality, and keeping their ride history private.

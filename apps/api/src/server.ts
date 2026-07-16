@@ -1,13 +1,9 @@
 import cors from "cors";
-import express, {
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import helmet from "helmet";
 import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type { EncryptedPayload } from "@motoplanner/shared";
+import type { EncryptedPayload } from "@twistaway/shared";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { type AppDatabase, openDatabase } from "./db.js";
 import {
@@ -78,7 +74,7 @@ interface OsrmResponse {
   code: string;
   routes?: OsrmRoute[];
   waypoints?: unknown[];
-  motoplanner?: {
+  twistaway?: {
     preferences: RoutePreferences;
     notes: string[];
   };
@@ -111,9 +107,55 @@ interface ValhallaResponse {
   };
 }
 
-const searchCache = new Map<string, { expiresAt: number; payload: unknown }>();
-const searchInFlight = new Map<string, Promise<SearchPayload>>();
 const searchCacheTtlMs = 5 * 60 * 1000;
+const routeCacheTtlMs = 10 * 60 * 1000;
+
+class ExpiringLruCache<T> {
+  private readonly entries = new Map<string, { expiresAt: number; value: T }>();
+
+  constructor(
+    private readonly maximumEntries: number,
+    private readonly timeToLiveMs: number,
+  ) {}
+
+  get(key: string): T | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    this.entries.delete(key);
+    if (entry.expiresAt <= Date.now()) {
+      return undefined;
+    }
+    this.entries.set(key, entry);
+    return entry.value;
+  }
+
+  set(key: string, value: T): void {
+    this.removeExpired();
+    this.entries.delete(key);
+    while (this.entries.size >= this.maximumEntries) {
+      const oldestKey = this.entries.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
+      }
+      this.entries.delete(oldestKey);
+    }
+    this.entries.set(key, {
+      expiresAt: Date.now() + this.timeToLiveMs,
+      value,
+    });
+  }
+
+  private removeExpired(): void {
+    const now = Date.now();
+    for (const [key, entry] of this.entries) {
+      if (entry.expiresAt <= now) {
+        this.entries.delete(key);
+      }
+    }
+  }
+}
 
 interface SearchResult {
   name: string;
@@ -137,8 +179,7 @@ function expiresInDays(days: number): string {
 }
 
 function getIp(req: Request): string {
-  const forwarded = req.header("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || req.socket.remoteAddress || "unknown";
+  return req.ip || req.socket.remoteAddress || "unknown";
 }
 
 function boolQuery(value: unknown): boolean {
@@ -199,8 +240,7 @@ function effectiveShapingPoints(
   preferences: RoutePreferences,
   notes: string[],
 ): RoutePoint[] {
-  const scenicPressure =
-    preferences.scenic >= 0.85 && preferences.autoScenicDetour;
+  const scenicPressure = preferences.scenic >= 0.85 && preferences.autoScenicDetour;
   if (!preferences.pureBackroads && !scenicPressure) {
     return requested;
   }
@@ -213,11 +253,7 @@ function effectiveShapingPoints(
     return requested;
   }
 
-  const automatic = automaticScenicCorridorPoints(
-    origin,
-    destination,
-    preferences,
-  );
+  const automatic = automaticScenicCorridorPoints(origin, destination, preferences);
   if (automatic.length === 0) {
     if (preferences.pureBackroads) {
       notes.push(
@@ -258,9 +294,7 @@ function automaticScenicCorridorPoints(
     Math.max(
       2500,
       directDistanceMeters *
-        (0.16 +
-          preferences.scenic * 0.1 +
-          (preferences.pureBackroads ? 0.06 : 0)),
+        (0.16 + preferences.scenic * 0.1 + (preferences.pureBackroads ? 0.06 : 0)),
     ),
   );
   const waypointFractions = preferences.pureBackroads
@@ -280,25 +314,15 @@ function automaticScenicCorridorPoints(
         directDistanceMeters * fraction,
         directBearing,
       );
-      return destinationPoint(
-        centerlinePoint,
-        offsetDistanceMeters,
-        offsetBearing,
-      );
+      return destinationPoint(centerlinePoint, offsetDistanceMeters, offsetBearing);
     })
     .filter((point) => Math.abs(point.lat) <= 85)
     .filter(
-      (point) =>
-        haversineMeters(origin.lat, origin.lon, point.lat, point.lon) > 3500,
+      (point) => haversineMeters(origin.lat, origin.lon, point.lat, point.lon) > 3500,
     )
     .filter(
       (point) =>
-        haversineMeters(
-          destination.lat,
-          destination.lon,
-          point.lat,
-          point.lon,
-        ) > 3500,
+        haversineMeters(destination.lat, destination.lon, point.lat, point.lon) > 3500,
     );
 }
 
@@ -312,24 +336,14 @@ function scenicOffsetBearing(
   const rightBearing = (directBearing + 90) % 360;
   const midpoint = destinationPoint(
     origin,
-    haversineMeters(origin.lat, origin.lon, destination.lat, destination.lon) /
-      2,
+    haversineMeters(origin.lat, origin.lon, destination.lat, destination.lon) / 2,
     directBearing,
   );
-  const leftPoint = destinationPoint(
-    midpoint,
-    offsetDistanceMeters,
-    leftBearing,
-  );
-  const rightPoint = destinationPoint(
-    midpoint,
-    offsetDistanceMeters,
-    rightBearing,
-  );
+  const leftPoint = destinationPoint(midpoint, offsetDistanceMeters, leftBearing);
+  const rightPoint = destinationPoint(midpoint, offsetDistanceMeters, rightBearing);
   const preferNorth =
     (origin.lat + destination.lat) / 2 >= 0 &&
-    Math.abs(destination.lon - origin.lon) >=
-      Math.abs(destination.lat - origin.lat);
+    Math.abs(destination.lon - origin.lon) >= Math.abs(destination.lat - origin.lat);
 
   if (preferNorth) {
     return leftPoint.lat >= rightPoint.lat ? leftBearing : rightBearing;
@@ -363,9 +377,7 @@ function haversineMeters(
 function routeClasses(route: OsrmRoute): string[] {
   return (route.legs ?? []).flatMap((leg) =>
     (leg.steps ?? []).flatMap((step) =>
-      (step.intersections ?? []).flatMap(
-        (intersection) => intersection.classes ?? [],
-      ),
+      (step.intersections ?? []).flatMap((intersection) => intersection.classes ?? []),
     ),
   );
 }
@@ -471,12 +483,10 @@ function photonDisplayName(properties: Record<string, unknown>): string {
   const name = typeof properties.name === "string" ? properties.name : null;
   const houseNumber =
     typeof properties.housenumber === "string" ? properties.housenumber : null;
-  const street =
-    typeof properties.street === "string" ? properties.street : null;
+  const street = typeof properties.street === "string" ? properties.street : null;
   const city = typeof properties.city === "string" ? properties.city : null;
   const state = typeof properties.state === "string" ? properties.state : null;
-  const country =
-    typeof properties.country === "string" ? properties.country : null;
+  const country = typeof properties.country === "string" ? properties.country : null;
   const addressLine = [houseNumber, street].filter(Boolean).join(" ");
   const parts = [name ?? addressLine, city, state, country].filter(
     (part, index, values): part is string =>
@@ -582,17 +592,12 @@ function selectPreferredRoute(
     `Scored ${routes.length} route alternatives using current ride preferences.`,
   );
   if (selected.index !== 0) {
-    notes.push(
-      `Selected alternative ${selected.index + 1} over the provider default.`,
-    );
+    notes.push(`Selected alternative ${selected.index + 1} over the provider default.`);
   }
 
   return {
     ...payload,
-    routes: [
-      selected.route,
-      ...routes.filter((_, index) => index !== selected.index),
-    ],
+    routes: [selected.route, ...routes.filter((_, index) => index !== selected.index)],
   };
 }
 
@@ -613,20 +618,14 @@ async function routeWithValhalla(
         ? 1
         : preferences.targetStraightRoads
           ? 0.85
-          : Math.max(
-              0.2,
-              0.62 - preferences.scenic * 0.3 - preferences.twisty * 0.2,
-            );
+          : Math.max(0.2, 0.62 - preferences.scenic * 0.3 - preferences.twisty * 0.2);
   const useRoads = preferences.pureBackroads
     ? 0.08
     : preferences.avoidMainRoads
       ? 0.25
       : preferences.targetStraightRoads
         ? 0.85
-        : Math.max(
-            0.2,
-            0.75 - preferences.twisty * 0.22 - preferences.scenic * 0.08,
-          );
+        : Math.max(0.2, 0.75 - preferences.twisty * 0.22 - preferences.scenic * 0.08);
   const shortest = preferences.pureBackroads
     ? false
     : preferences.targetStraightRoads
@@ -660,7 +659,7 @@ async function routeWithValhalla(
   const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
     method: "POST",
     headers: {
-      "User-Agent": "MotoPlanner/0.1 (development contact: motoplanner.local)",
+      "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
       Accept: "application/json",
       "Content-Type": "application/json",
     },
@@ -673,9 +672,7 @@ async function routeWithValhalla(
 
   const payload = (await upstream.json()) as ValhallaResponse;
   if (!payload.trip?.legs?.length) {
-    throw new Error(
-      payload.trip?.status_message ?? "Valhalla returned no route",
-    );
+    throw new Error(payload.trip?.status_message ?? "Valhalla returned no route");
   }
 
   notes.push(
@@ -685,9 +682,7 @@ async function routeWithValhalla(
     notes.push("Avoid highways active.");
   }
   if (preferences.avoidMainRoads) {
-    notes.push(
-      "Backroads active: heavily reducing highways and major arterials.",
-    );
+    notes.push("Backroads active: heavily reducing highways and major arterials.");
   }
   if (preferences.pureBackroads) {
     notes.push(
@@ -695,9 +690,7 @@ async function routeWithValhalla(
     );
   }
   if (preferences.autoScenicDetour) {
-    notes.push(
-      "Auto scenic detour active: slower scenic alternatives can win.",
-    );
+    notes.push("Auto scenic detour active: slower scenic alternatives can win.");
   }
   if (shapingPoints.length > 0) {
     notes.push(
@@ -725,10 +718,7 @@ function valhallaToOsrm(payload: ValhallaResponse): OsrmResponse {
     const fallbackSegment =
       segment.length >= 2
         ? segment
-        : points.slice(
-            Math.max(0, start - 1),
-            Math.min(points.length, start + 2),
-          );
+        : points.slice(Math.max(0, start - 1), Math.min(points.length, start + 2));
     return {
       intersections: [],
       driving_side: "right",
@@ -767,8 +757,7 @@ function valhallaToOsrm(payload: ValhallaResponse): OsrmResponse {
         geometry: {
           coordinates: points.map((point) => [point[1], point[0]]),
         },
-        duration:
-          summary?.time ?? steps.reduce((sum, step) => sum + step.duration, 0),
+        duration: summary?.time ?? steps.reduce((sum, step) => sum + step.duration, 0),
         distance: (summary?.length ?? 0) * 1609.344,
       },
     ],
@@ -831,9 +820,7 @@ async function routeWithOsrm(
     ...shapingPoints,
     { lat: destinationLat, lon: destinationLng },
   ];
-  const coordinates = routePoints
-    .map((point) => `${point.lon},${point.lat}`)
-    .join(";");
+  const coordinates = routePoints.map((point) => `${point.lon},${point.lat}`).join(";");
   const url = new URL(
     `https://router.project-osrm.org/route/v1/driving/${coordinates}`,
   );
@@ -858,7 +845,7 @@ async function routeWithOsrm(
 
   let upstream = await fetch(url, {
     headers: {
-      "User-Agent": "MotoPlanner/0.1 (development contact: motoplanner.local)",
+      "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
       Accept: "application/json",
     },
   });
@@ -870,8 +857,7 @@ async function routeWithOsrm(
     url.searchParams.delete("exclude");
     upstream = await fetch(url, {
       headers: {
-        "User-Agent":
-          "MotoPlanner/0.1 (development contact: motoplanner.local)",
+        "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
         Accept: "application/json",
       },
     });
@@ -889,9 +875,32 @@ export function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? loadConfig();
   const db = options.db ?? openDatabase(config.databasePath);
   const app = express();
+  const searchCache = new ExpiringLruCache<SearchPayload>(128, searchCacheTtlMs);
+  const searchInFlight = new Map<string, Promise<SearchPayload>>();
+  const routeCache = new ExpiringLruCache<OsrmResponse>(64, routeCacheTtlMs);
+  const routeInFlight = new Map<string, Promise<OsrmResponse>>();
+
+  if (config.trustProxy) {
+    app.set("trust proxy", 1);
+  }
 
   app.use(helmet());
-  app.use(cors({ origin: true, credentials: true }));
+  app.use(
+    cors({
+      credentials: true,
+      origin(origin, callback) {
+        if (
+          !origin ||
+          !config.corsOrigins?.length ||
+          config.corsOrigins.includes(origin)
+        ) {
+          callback(null, true);
+          return;
+        }
+        callback(null, false);
+      },
+    }),
+  );
   app.use(express.json({ limit: "1mb" }));
 
   function audit(
@@ -930,9 +939,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
     const header = req.header("authorization");
-    const token = header?.startsWith("Bearer ")
-      ? header.slice("Bearer ".length)
-      : null;
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
     if (!token) {
       res.status(401).json({ error: "missing bearer token" });
       return;
@@ -969,7 +976,7 @@ export function createApp(options: CreateAppOptions = {}) {
   }
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true, service: "motoplanner-api" });
+    res.json({ ok: true, service: "twistaway-api" });
   });
 
   app.get("/integrations/search", async (req, res, next) => {
@@ -986,9 +993,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const south = optionalNumberQuery(req.query.south);
       const east = optionalNumberQuery(req.query.east);
       const west = optionalNumberQuery(req.query.west);
-      const hasBounds = [north, south, east, west].every(
-        (value) => value !== null,
-      );
+      const hasBounds = [north, south, east, west].every((value) => value !== null);
       const hasCenter = centerLat !== null && centerLng !== null;
       const cacheKey = JSON.stringify({
         q: q.toLowerCase(),
@@ -1000,15 +1005,15 @@ export function createApp(options: CreateAppOptions = {}) {
         west: west?.toFixed(2),
       });
       const cached = searchCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        res.setHeader("X-MotoPlanner-Search-Cache", "hit");
-        res.json(cached.payload);
+      if (cached) {
+        res.setHeader("X-Twistaway-Search-Cache", "hit");
+        res.json(cached);
         return;
       }
 
       const pending = searchInFlight.get(cacheKey);
       if (pending) {
-        res.setHeader("X-MotoPlanner-Search-Cache", "pending");
+        res.setHeader("X-Twistaway-Search-Cache", "pending");
         res.json(await pending);
         return;
       }
@@ -1031,8 +1036,7 @@ export function createApp(options: CreateAppOptions = {}) {
         }>(
           url,
           {
-            "User-Agent":
-              "MotoPlanner/0.1 (development contact: motoplanner.local)",
+            "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
             Accept: "application/json",
           },
           1500,
@@ -1052,9 +1056,7 @@ export function createApp(options: CreateAppOptions = {}) {
             latitude,
             longitude,
             type:
-              typeof properties.osm_value === "string"
-                ? properties.osm_value
-                : null,
+              typeof properties.osm_value === "string" ? properties.osm_value : null,
           };
         });
       }
@@ -1078,8 +1080,7 @@ export function createApp(options: CreateAppOptions = {}) {
         return await fetchJsonWithTimeout<Array<Record<string, unknown>>>(
           url,
           {
-            "User-Agent":
-              "MotoPlanner/0.1 (development contact: motoplanner.local)",
+            "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
             Accept: "application/json",
           },
           bounded ? 2200 : 2800,
@@ -1129,12 +1130,7 @@ export function createApp(options: CreateAppOptions = {}) {
               hasCenter &&
               Number.isFinite(item.latitude) &&
               Number.isFinite(item.longitude)
-                ? haversineMeters(
-                    centerLat!,
-                    centerLng!,
-                    item.latitude,
-                    item.longitude,
-                  )
+                ? haversineMeters(centerLat!, centerLng!, item.latitude, item.longitude)
                 : null;
             return {
               ...item,
@@ -1142,8 +1138,7 @@ export function createApp(options: CreateAppOptions = {}) {
             };
           })
           .filter(
-            (item) =>
-              Number.isFinite(item.latitude) && Number.isFinite(item.longitude),
+            (item) => Number.isFinite(item.latitude) && Number.isFinite(item.longitude),
           );
 
         if (hasCenter || hasBounds) {
@@ -1156,10 +1151,7 @@ export function createApp(options: CreateAppOptions = {}) {
         };
       }
 
-      function pointOutsideBounds(
-        latitude: number,
-        longitude: number,
-      ): boolean {
+      function pointOutsideBounds(latitude: number, longitude: number): boolean {
         return (
           hasBounds &&
           (latitude > north! ||
@@ -1195,11 +1187,8 @@ export function createApp(options: CreateAppOptions = {}) {
       } finally {
         searchInFlight.delete(cacheKey);
       }
-      searchCache.set(cacheKey, {
-        expiresAt: Date.now() + searchCacheTtlMs,
-        payload,
-      });
-      res.setHeader("X-MotoPlanner-Search-Cache", "miss");
+      searchCache.set(cacheKey, payload);
+      res.setHeader("X-Twistaway-Search-Cache", "miss");
       res.json(payload);
     } catch (error) {
       next(error);
@@ -1214,9 +1203,7 @@ export function createApp(options: CreateAppOptions = {}) {
       const destinationLng = Number(req.query.destinationLng);
 
       if (
-        ![originLat, originLng, destinationLat, destinationLng].every(
-          Number.isFinite,
-        )
+        ![originLat, originLng, destinationLat, destinationLng].every(Number.isFinite)
       ) {
         res.status(400).json({
           error:
@@ -1226,85 +1213,118 @@ export function createApp(options: CreateAppOptions = {}) {
       }
 
       const preferences = routePreferencesFromQuery(req.query);
-      const plannerNotes: string[] = [];
       const origin = { lat: originLat, lon: originLng };
       const destination = { lat: destinationLat, lon: destinationLng };
-      const requestedShapingPoints = parseShapingPoints(
-        req.query.shapingPoints,
-      );
-      const shapingPoints = effectiveShapingPoints(
-        origin,
-        destination,
-        requestedShapingPoints,
+      const requestedShapingPoints = parseShapingPoints(req.query.shapingPoints);
+      const cacheKey = JSON.stringify({
+        origin: [originLat.toFixed(6), originLng.toFixed(6)],
+        destination: [destinationLat.toFixed(6), destinationLng.toFixed(6)],
+        shapingPoints: requestedShapingPoints.map((point) => [
+          point.lat.toFixed(6),
+          point.lon.toFixed(6),
+        ]),
         preferences,
-        plannerNotes,
-      );
-      const automaticShapingApplied =
-        shapingPoints.length > requestedShapingPoints.length;
-      let selected: OsrmResponse;
-      try {
-        selected = await routeWithValhalla(
-          originLat,
-          originLng,
-          destinationLat,
-          destinationLng,
-          shapingPoints,
-          preferences,
-          plannerNotes,
-        );
-        if (automaticShapingApplied) {
-          try {
-            const guardNotes: string[] = [];
-            const guarded = await routeWithValhalla(
-              originLat,
-              originLng,
-              destinationLat,
-              destinationLng,
-              requestedShapingPoints,
-              preferences,
-              guardNotes,
-            );
-            const selectedRoute = selected.routes?.[0];
-            const guardedRoute = guarded.routes?.[0];
-            if (
-              selectedRoute &&
-              guardedRoute &&
-              (selectedRoute.distance > guardedRoute.distance * 1.42 ||
-                selectedRoute.duration > guardedRoute.duration * 1.55)
-            ) {
-              plannerNotes.push(
-                "Scenic corridor guard skipped the automatic scenic arc because it made the ride too inefficient.",
-              );
-              selected = guarded;
-            }
-          } catch {
-            plannerNotes.push(
-              "Scenic corridor guard could not compare a simpler route, so the scenic route was kept.",
-            );
-          }
-        }
-      } catch (error) {
-        plannerNotes.push(
-          `Valhalla preference routing unavailable: ${error instanceof Error ? error.message : "unknown error"}.`,
-        );
-        selected = await routeWithOsrm(
-          originLat,
-          originLng,
-          destinationLat,
-          destinationLng,
-          shapingPoints,
-          preferences,
-          plannerNotes,
-        );
+      });
+      const cached = routeCache.get(cacheKey);
+      if (cached) {
+        res.setHeader("X-Twistaway-Route-Cache", "hit");
+        res.json(cached);
+        return;
       }
 
-      res.json({
-        ...selected,
-        motoplanner: {
+      const pending = routeInFlight.get(cacheKey);
+      if (pending) {
+        res.setHeader("X-Twistaway-Route-Cache", "pending");
+        res.json(await pending);
+        return;
+      }
+
+      const routeRequest = (async (): Promise<OsrmResponse> => {
+        const plannerNotes: string[] = [];
+        const shapingPoints = effectiveShapingPoints(
+          origin,
+          destination,
+          requestedShapingPoints,
           preferences,
-          notes: plannerNotes,
-        },
-      });
+          plannerNotes,
+        );
+        const automaticShapingApplied =
+          shapingPoints.length > requestedShapingPoints.length;
+        let selected: OsrmResponse;
+        try {
+          selected = await routeWithValhalla(
+            originLat,
+            originLng,
+            destinationLat,
+            destinationLng,
+            shapingPoints,
+            preferences,
+            plannerNotes,
+          );
+          if (automaticShapingApplied) {
+            try {
+              const guardNotes: string[] = [];
+              const guarded = await routeWithValhalla(
+                originLat,
+                originLng,
+                destinationLat,
+                destinationLng,
+                requestedShapingPoints,
+                preferences,
+                guardNotes,
+              );
+              const selectedRoute = selected.routes?.[0];
+              const guardedRoute = guarded.routes?.[0];
+              if (
+                selectedRoute &&
+                guardedRoute &&
+                (selectedRoute.distance > guardedRoute.distance * 1.42 ||
+                  selectedRoute.duration > guardedRoute.duration * 1.55)
+              ) {
+                plannerNotes.push(
+                  "Scenic corridor guard skipped the automatic scenic arc because it made the ride too inefficient.",
+                );
+                selected = guarded;
+              }
+            } catch {
+              plannerNotes.push(
+                "Scenic corridor guard could not compare a simpler route, so the scenic route was kept.",
+              );
+            }
+          }
+        } catch (error) {
+          plannerNotes.push(
+            `Valhalla preference routing unavailable: ${error instanceof Error ? error.message : "unknown error"}.`,
+          );
+          selected = await routeWithOsrm(
+            originLat,
+            originLng,
+            destinationLat,
+            destinationLng,
+            shapingPoints,
+            preferences,
+            plannerNotes,
+          );
+        }
+
+        return {
+          ...selected,
+          twistaway: {
+            preferences,
+            notes: plannerNotes,
+          },
+        };
+      })();
+      routeInFlight.set(cacheKey, routeRequest);
+      let payload: OsrmResponse;
+      try {
+        payload = await routeRequest;
+      } finally {
+        routeInFlight.delete(cacheKey);
+      }
+      routeCache.set(cacheKey, payload);
+      res.setHeader("X-Twistaway-Route-Cache", "miss");
+      res.json(payload);
     } catch (error) {
       next(error);
     }
@@ -1434,9 +1454,7 @@ export function createApp(options: CreateAppOptions = {}) {
 
   app.post("/auth/logout", requireAuth, (req: AuthedRequest, res) => {
     audit(req, "logout");
-    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(
-      req.auth!.tokenHash,
-    );
+    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(req.auth!.tokenHash);
     res.status(204).send();
   });
 
@@ -1500,34 +1518,26 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  app.put(
-    "/profile/home-address",
-    requireAuth,
-    (req: AuthedRequest, res, next) => {
-      try {
-        const body = profileSecretSchema.parse(req.body);
-        const timestamp = nowIso();
-        db.prepare(
-          `
+  app.put("/profile/home-address", requireAuth, (req: AuthedRequest, res, next) => {
+    try {
+      const body = profileSecretSchema.parse(req.body);
+      const timestamp = nowIso();
+      db.prepare(
+        `
         INSERT INTO profile_secrets (user_id, kind, encrypted_payload, updated_at)
         VALUES (?, 'home_address', ?, ?)
         ON CONFLICT(user_id, kind) DO UPDATE SET
           encrypted_payload = excluded.encrypted_payload,
           updated_at = excluded.updated_at
       `,
-        ).run(
-          req.auth!.userId,
-          JSON.stringify(body.encryptedPayload),
-          timestamp,
-        );
+      ).run(req.auth!.userId, JSON.stringify(body.encryptedPayload), timestamp);
 
-        audit(req, "profile.home_address.update");
-        res.json({ updatedAt: timestamp });
-      } catch (error) {
-        next(error);
-      }
-    },
-  );
+      audit(req, "profile.home_address.update");
+      res.json({ updatedAt: timestamp });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.get("/profile/home-address", requireAuth, (req: AuthedRequest, res) => {
     audit(req, "profile.home_address.read");
@@ -1540,8 +1550,7 @@ export function createApp(options: CreateAppOptions = {}) {
     `,
       )
       .get(req.auth!.userId) as
-      | { encrypted_payload: string; updated_at: string }
-      | undefined;
+      { encrypted_payload: string; updated_at: string } | undefined;
 
     if (!row) {
       res.status(404).json({ error: "home address not set" });
@@ -1554,20 +1563,18 @@ export function createApp(options: CreateAppOptions = {}) {
     });
   });
 
-  app.use(
-    (error: unknown, _req: Request, res: Response, _next: NextFunction) => {
-      if (error && typeof error === "object" && "issues" in error) {
-        res.status(400).json({
-          error: "validation failed",
-          issues: (error as { issues: unknown }).issues,
-        });
-        return;
-      }
+  app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (error && typeof error === "object" && "issues" in error) {
+      res.status(400).json({
+        error: "validation failed",
+        issues: (error as { issues: unknown }).issues,
+      });
+      return;
+    }
 
-      console.error(error);
-      res.status(500).json({ error: "internal server error" });
-    },
-  );
+    console.error(error);
+    res.status(500).json({ error: "internal server error" });
+  });
 
   return app;
 }
@@ -1575,6 +1582,6 @@ export function createApp(options: CreateAppOptions = {}) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const config = loadConfig();
   createApp({ config }).listen(config.port, () => {
-    console.log(`MotoPlanner API listening on http://localhost:${config.port}`);
+    console.log(`Twistaway API listening on http://localhost:${config.port}`);
   });
 }

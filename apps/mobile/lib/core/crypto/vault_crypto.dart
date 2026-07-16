@@ -39,7 +39,7 @@ class VaultCrypto {
   VaultCrypto({FlutterSecureStorage? secureStorage})
       : _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
-  static const _installSecretKey = 'motoplanner.install_secret.v1';
+  static const _installSecretKey = 'twistaway.install_secret.v1';
   static final _random = Random.secure();
 
   final FlutterSecureStorage _secureStorage;
@@ -66,16 +66,17 @@ class VaultCrypto {
     ).deriveKey(
       secretKey: passwordKey,
       nonce: installSecret,
-      info: utf8.encode('motoplanner-user-vault-v1'),
+      info: utf8.encode('twistaway-user-vault-v1'),
     );
   }
 
   Future<EncryptedPayload> encryptJson({
     required SecretKey vaultKey,
     required Object value,
-    String aad = 'motoplanner-mobile-v1',
+    String aad = 'twistaway-mobile-v1',
   }) async {
-    final nonce = Uint8List.fromList(List<int>.generate(12, (_) => _random.nextInt(256)));
+    final nonce =
+        Uint8List.fromList(List<int>.generate(12, (_) => _random.nextInt(256)));
     final box = await _aes.encrypt(
       utf8.encode(jsonEncode(value)),
       secretKey: vaultKey,
@@ -117,8 +118,10 @@ class VaultCrypto {
       return base64.decode(existing);
     }
 
-    final secret = Uint8List.fromList(List<int>.generate(32, (_) => _random.nextInt(256)));
-    await _secureStorage.write(key: _installSecretKey, value: base64.encode(secret));
+    final secret =
+        Uint8List.fromList(List<int>.generate(32, (_) => _random.nextInt(256)));
+    await _secureStorage.write(
+        key: _installSecretKey, value: base64.encode(secret));
     return secret;
   }
 }

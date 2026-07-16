@@ -1,4 +1,5 @@
 node_modules/
+.codex/
 dist/
 .env
 .env.*
@@ -9,10 +10,20 @@ dist/
 *.sqlite-shm
 *.sqlite-wal
 coverage/
+artifacts/
+backups/
+data/
+site/
 .dart_tool/
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
+.venv-docs/
 pubspec.lock
+!apps/mobile/pubspec.lock
 .code/*
+.idea/
 .vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json

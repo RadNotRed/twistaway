@@ -1,0 +1,13 @@
+apps/mobile/android/**
+apps/mobile/assets/**
+apps/mobile/ios/**
+apps/mobile/lib/**
+apps/mobile/test/**
+apps/mobile/web/**
+apps/mobile/windows/**
+artifacts/**
+backups/**
+bun.lock
+data/**
+node_modules/**
+site/**

@@ -1,27 +1,78 @@
-# MotoPlanner Mobile
+# 📱 Twistaway Flutter app
 
-Flutter mobile app for MotoPlanner. It targets Android, iOS, web testing, and Windows desktop during local development.
+The primary Twistaway client targets Android, iOS, Windows, and web from one Flutter
+project. Run supported commands from the **repository root** through Bun so local
+development and CI use the same entry points.
 
-## Development
+## 🚀 Development
 
 ```bash
-flutter pub get
-flutter analyze
-flutter test
-flutter run -d web-server
+bun install --frozen-lockfile
+cd apps/mobile && flutter pub get && cd ../..
+bun run dev:web
 ```
 
-The app shell currently includes:
+Other targets:
 
-- Material 3 light, dark, and system theme modes.
-- Motorcycle route preference controls.
-- Voice prompt preview for directions.
-- OpenStreetMap map tiles for development.
-- Nominatim location search.
-- OSRM demo routing with route geometry, distance, duration, and turn cards.
-- A vault crypto helper for password-derived encrypted payloads.
-- Generated Android, iOS, web, and Windows platform folders.
+```bash
+bun run dev:mobile   # Select an attached Flutter device
+bun run dev:android  # Start the configured emulator and launch the app
+```
 
-Android testing requires Android Studio or an Android SDK. iOS device/simulator testing requires macOS and Xcode.
+VS Code includes launch configurations for the configured Android emulator and the
+currently selected device. JetBrains run configurations expose the same emulator/build
+tooling.
 
-The current map/search/routing providers are good for local development and early product feel. Before production, replace them with provider accounts or hosted services that match expected traffic, caching, attribution, and offline-map requirements.
+## 📦 Builds
+
+```bash
+bun run build:android
+bun run build:android:debug
+bun run build:web
+bun run build:ios
+bun run build:all
+```
+
+Artifacts are copied to the repository-level `artifacts/` directory. iOS IPA builds
+require macOS, Xcode, CocoaPods, and valid Apple signing.
+
+Release-oriented builds default to `https://api.twistaway.app`. Override the embedded
+API for staging:
+
+```bash
+TWISTAWAY_API_BASE_URL=https://staging-api.twistaway.app bun run build:web
+```
+
+## 🧪 Quality
+
+```bash
+bun run format:flutter
+bun run analyze:flutter
+bun run test:flutter
+bun run check:flutter
+```
+
+UI changes should also be exercised in a browser or emulator. Widget tests do not fully
+prove map gestures, bottom-sheet drag behavior, keyboard transitions, or safe-area
+spacing.
+
+## 🔑 Spotify configuration
+
+Spotify uses Authorization Code with PKCE and the registered redirect URI:
+
+```text
+twistaway-login://spotify-callback
+```
+
+Provide the public Spotify client ID through the app's build configuration. Do not add a
+Spotify client secret to Flutter, source control, or distributed artifacts.
+
+## 🏷️ Application identity
+
+- Display name: `Twistaway`
+- Dart package: `twistaway_app`
+- Android application ID: `com.twistaway.app`
+- Production API: `https://api.twistaway.app`
+
+See the root [README](../../README.md), [agent guide](../../AGENTS.md), and
+[documentation](../../docs/index.md) for architecture and deployment details.

@@ -1,0 +1,55 @@
+name: twistaway
+
+services:
+  api:
+    image: twistaway-api:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      NODE_ENV: production
+      PORT: "4180"
+      DB_PATH: /data/twistaway.sqlite
+      APP_ENCRYPTION_SECRET:
+        ${APP_ENCRYPTION_SECRET:?Copy docker.env.example to .env and set
+        APP_ENCRYPTION_SECRET}
+      SESSION_DAYS: ${SESSION_DAYS:-30}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://twistaway.app,https://www.twistaway.app,https://app.twistaway.app}
+      TRUST_PROXY: "true"
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-4180}:4180"
+    volumes:
+      - twistaway-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      api:
+        condition: service_healthy
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  twistaway-data:
+    name: twistaway-data

@@ -5,6 +5,8 @@ export interface ApiConfig {
   port: number;
   serverSecret: string;
   sessionDays: number;
+  corsOrigins?: string[];
+  trustProxy?: boolean;
 }
 
 export function loadConfig(): ApiConfig {
@@ -13,9 +15,16 @@ export function loadConfig(): ApiConfig {
     "dev-only-change-me-" + randomBytes(16).toString("hex");
 
   return {
-    databasePath: process.env.DB_PATH ?? "motoplanner.sqlite",
+    databasePath: process.env.DB_PATH ?? "twistaway.sqlite",
     port: Number(process.env.PORT ?? 4180),
     serverSecret,
-    sessionDays: Number(process.env.SESSION_DAYS ?? 30)
+    sessionDays: Number(process.env.SESSION_DAYS ?? 30),
+    corsOrigins: (process.env.CORS_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+    trustProxy: ["1", "true", "yes"].includes(
+      (process.env.TRUST_PROXY ?? "").toLowerCase(),
+    ),
   };
 }

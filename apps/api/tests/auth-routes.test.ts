@@ -128,10 +128,30 @@ describe("auth and encrypted route storage", () => {
     ]);
     expect(requestBody.costing_options.auto.use_highways).toBe(0.01);
     expect(requestBody.costing_options.auto.use_roads).toBe(0.25);
-    expect(response.body.motoplanner.preferences.avoidMainRoads).toBe(true);
-    expect(response.body.motoplanner.notes).toContain(
+    expect(response.body.twistaway.preferences.avoidMainRoads).toBe(true);
+    expect(response.body.twistaway.notes).toContain(
       "Routing through 2 route shaping points.",
     );
+    expect(response.headers["x-twistaway-route-cache"]).toBe("miss");
+
+    const cached = await request(app)
+      .get("/integrations/route")
+      .query({
+        originLat: 40.8,
+        originLng: -73.72,
+        destinationLat: 40.9,
+        destinationLng: -73.35,
+        shapingPoints: "40.820000,-73.650000;40.880000,-73.500000",
+        scenic: 0.9,
+        twisty: 0.8,
+        avoidHighways: "1",
+        avoidMainRoads: "1",
+        autoScenicDetour: "1",
+      })
+      .expect(200);
+
+    expect(cached.headers["x-twistaway-route-cache"]).toBe("hit");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("uses fast place search results before falling back to slower search", async () => {
@@ -177,6 +197,19 @@ describe("auth and encrypted route storage", () => {
       longitude: -73.525,
       type: "city",
     });
+    expect(response.headers["x-twistaway-search-cache"]).toBe("miss");
+
+    const cached = await request(app)
+      .get("/integrations/search")
+      .query({
+        q: "hicksville",
+        centerLat: 40.76,
+        centerLng: -73.52,
+      })
+      .expect(200);
+
+    expect(cached.headers["x-twistaway-search-cache"]).toBe("hit");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("adds generic scenic arc waypoints for pure backroads", async () => {
@@ -251,8 +284,8 @@ describe("auth and encrypted route storage", () => {
     expect(requestBody.costing_options.auto.use_highways).toBe(0);
     expect(requestBody.costing_options.auto.use_roads).toBe(0.08);
     expect(requestBody.costing_options.auto.shortest).toBe(false);
-    expect(response.body.motoplanner.preferences.pureBackroads).toBe(true);
-    expect(response.body.motoplanner.notes).toContain(
+    expect(response.body.twistaway.preferences.pureBackroads).toBe(true);
+    expect(response.body.twistaway.notes).toContain(
       "Auto scenic corridor added 3 waypoints to build a less direct scenic arc.",
     );
   });
@@ -302,16 +335,43 @@ describe("auth and encrypted route storage", () => {
       })
       .expect(200);
 
-    const guardedRequestBody = JSON.parse(
-      fetchMock.mock.calls[1][1]?.body as string,
-    );
+    const guardedRequestBody = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
     expect(guardedRequestBody.locations).toEqual([
       { lat: 40.768, lon: -73.525 },
       { lat: 40.875, lon: -73.006 },
     ]);
     expect(response.body.routes[0].distance).toBeCloseTo(34 * 1609.344);
-    expect(response.body.motoplanner.notes).toContain(
+    expect(response.body.twistaway.notes).toContain(
       "Scenic corridor guard skipped the automatic scenic arc because it made the ride too inefficient.",
     );
+  });
+});
+
+describe("deployment headers", () => {
+  it("allows configured browser origins and rejects unconfigured origins", async () => {
+    const app = createApp({
+      config: {
+        databasePath: ":memory:",
+        port: 0,
+        serverSecret: "test-secret",
+        sessionDays: 1,
+        corsOrigins: ["https://twistaway.app"],
+        trustProxy: true,
+      },
+    });
+
+    const allowed = await request(app)
+      .get("/health")
+      .set("Origin", "https://twistaway.app")
+      .expect(200);
+    expect(allowed.headers["access-control-allow-origin"]).toBe(
+      "https://twistaway.app",
+    );
+
+    const rejected = await request(app)
+      .get("/health")
+      .set("Origin", "https://example.invalid")
+      .expect(200);
+    expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
   });
 });

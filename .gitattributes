@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.ico binary
+*.ipa binary
+*.jpg binary
+*.keystore binary
+*.png binary
+*.webp binary

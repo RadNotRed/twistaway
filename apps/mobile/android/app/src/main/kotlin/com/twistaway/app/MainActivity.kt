@@ -1,4 +1,4 @@
-package com.example.motoplanner_mobile
+package com.twistaway.app
 
 import io.flutter.embedding.android.FlutterActivity
 

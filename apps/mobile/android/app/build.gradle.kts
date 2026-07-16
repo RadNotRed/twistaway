@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.motoplanner_mobile"
+    namespace = "com.twistaway.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -20,20 +20,22 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.motoplanner_mobile"
+        applicationId = "com.twistaway.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders.putAll(
+            mapOf("appAuthRedirectScheme" to "twistaway-login"),
+        )
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Development releases use debug signing until protected production
+            // keystore secrets are configured in the release workflow.
             signingConfig = signingConfigs.getByName("debug")
         }
     }
