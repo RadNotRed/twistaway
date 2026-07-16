@@ -23,7 +23,7 @@ jobs:
         working-directory: apps/mobile
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -54,7 +54,7 @@ jobs:
           --dart-define=TWISTAWAY_API_BASE_URL=https://api.twistaway.app
 
       - name: Upload Android APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: twistaway-android-debug-${{ github.sha }}
           path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
@@ -62,7 +62,7 @@ jobs:
           retention-days: 14
 
       - name: Upload web bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: twistaway-web-${{ github.sha }}
           path: apps/mobile/build/web
@@ -75,7 +75,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
@@ -89,7 +89,7 @@ jobs:
         run: bun run build
 
       - name: Upload website
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: twistaway-website-${{ github.sha }}
           path: apps/web/dist
@@ -97,7 +97,7 @@ jobs:
           retention-days: 14
 
       - name: Upload API bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: twistaway-api-${{ github.sha }}
           path: |
