@@ -1,10 +1,11 @@
 import { DatabaseSync } from "node:sqlite";
 import request from "supertest";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApiConfig } from "../src/config.js";
 import { createApp } from "../src/server.js";
 import { migrate } from "../src/db.js";
 
-function testApp() {
+function testApp(config: Partial<ApiConfig> = {}) {
   const db = new DatabaseSync(":memory:");
   migrate(db);
   return createApp({
@@ -14,6 +15,8 @@ function testApp() {
       port: 0,
       serverSecret: "test-secret",
       sessionDays: 1,
+      environment: "test",
+      ...config,
     },
   });
 }
@@ -21,7 +24,7 @@ function testApp() {
 const encryptedPayload = {
   version: 1,
   algorithm: "AES-256-GCM",
-  nonce: "dGVzdC1ub25jZS0xMg",
+  nonce: "dGVzdC1ub25jZTEy",
   ciphertext: "Y2lwaGVydGV4dA",
   tag: "MTIzNDU2Nzg5MDEyMzQ1Ng",
   keyDerivation: "argon2id-hkdf-sha256",
@@ -79,6 +82,11 @@ describe("auth and encrypted route storage", () => {
     expect(routes.body.routes[0].encryptedPayload.ciphertext).toBe(
       encryptedPayload.ciphertext,
     );
+    expect(routes.body.pagination).toEqual({
+      limit: 100,
+      offset: 0,
+      hasMore: false,
+    });
   });
 
   it("routes through rider shaping points with backroad preferences", async () => {
@@ -371,7 +379,49 @@ describe("deployment headers", () => {
     const rejected = await request(app)
       .get("/health")
       .set("Origin", "https://example.invalid")
-      .expect(200);
+      .expect(403);
     expect(rejected.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("sets hardened headers and omits framework details", async () => {
+    const response = await request(testApp()).get("/health").expect(200);
+
+    expect(response.headers["x-powered-by"]).toBeUndefined();
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-request-id"]).toEqual(expect.any(String));
+    expect(response.headers["cache-control"]).toBe("no-store");
+  });
+
+  it("rate limits repeated authentication attempts", async () => {
+    const app = testApp({
+      authRateLimit: { maximum: 1, windowMs: 60_000 },
+    });
+
+    await request(app)
+      .post("/auth/login")
+      .send({ identifier: "nobody@example.com", password: "incorrect password" })
+      .expect(401);
+
+    const limited = await request(app)
+      .post("/auth/login")
+      .send({ identifier: "nobody@example.com", password: "incorrect password" })
+      .expect(429);
+    expect(limited.headers["retry-after"]).toEqual(expect.any(String));
+  });
+
+  it("rejects invalid route coordinates without calling a provider", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+
+    await request(testApp())
+      .get("/integrations/route")
+      .query({
+        originLat: 91,
+        originLng: -73,
+        destinationLat: 40,
+        destinationLng: -72,
+      })
+      .expect(400);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

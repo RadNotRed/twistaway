@@ -4,8 +4,12 @@ import helmet from "helmet";
 import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import type { EncryptedPayload } from "@twistaway/shared";
+import { ExpiringLruCache } from "./cache.js";
+import { ConcurrencyGate, ConcurrencyLimitError } from "./concurrency.js";
 import { loadConfig, type ApiConfig } from "./config.js";
 import { type AppDatabase, openDatabase } from "./db.js";
+import { MemoryTokenBucket, rateLimit } from "./rate-limit.js";
+import { sendOptimizedJson } from "./response.js";
 import {
   hashPassword,
   hashToken,
@@ -107,56 +111,6 @@ interface ValhallaResponse {
   };
 }
 
-const searchCacheTtlMs = 5 * 60 * 1000;
-const routeCacheTtlMs = 10 * 60 * 1000;
-
-class ExpiringLruCache<T> {
-  private readonly entries = new Map<string, { expiresAt: number; value: T }>();
-
-  constructor(
-    private readonly maximumEntries: number,
-    private readonly timeToLiveMs: number,
-  ) {}
-
-  get(key: string): T | undefined {
-    const entry = this.entries.get(key);
-    if (!entry) {
-      return undefined;
-    }
-    this.entries.delete(key);
-    if (entry.expiresAt <= Date.now()) {
-      return undefined;
-    }
-    this.entries.set(key, entry);
-    return entry.value;
-  }
-
-  set(key: string, value: T): void {
-    this.removeExpired();
-    this.entries.delete(key);
-    while (this.entries.size >= this.maximumEntries) {
-      const oldestKey = this.entries.keys().next().value;
-      if (oldestKey === undefined) {
-        break;
-      }
-      this.entries.delete(oldestKey);
-    }
-    this.entries.set(key, {
-      expiresAt: Date.now() + this.timeToLiveMs,
-      value,
-    });
-  }
-
-  private removeExpired(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.entries) {
-      if (entry.expiresAt <= now) {
-        this.entries.delete(key);
-      }
-    }
-  }
-}
-
 interface SearchResult {
   name: string;
   latitude: number;
@@ -169,6 +123,16 @@ interface SearchPayload {
   searchMode: string;
   results: SearchResult[];
 }
+
+interface SessionRecord {
+  user_id: string;
+  audit_key_envelope: string | null;
+  expires_at: string;
+}
+
+class CorsOriginError extends Error {}
+
+const dummyPasswordHashPromise = hashPassword(randomToken());
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -356,6 +320,21 @@ function optionalNumberQuery(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function validLatitude(value: number | null): boolean {
+  return value !== null && value >= -90 && value <= 90;
+}
+
+function validLongitude(value: number | null): boolean {
+  return value !== null && value >= -180 && value <= 180;
+}
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint < 32 || codePoint === 127;
+  });
+}
+
 function haversineMeters(
   lat1: number,
   lon1: number,
@@ -457,23 +436,49 @@ function destinationPoint(
 }
 
 async function fetchJsonWithTimeout<T>(
-  url: URL,
-  headers: Record<string, string>,
+  url: URL | string,
+  init: RequestInit,
   timeoutMs: number,
+  provider: string,
+  maximumBytes = 8 * 1024 * 1024,
 ): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const upstream = await fetch(url, {
-      headers,
+      ...init,
       signal: controller.signal,
     });
 
     if (!upstream.ok) {
-      throw new Error(`location provider failed (${upstream.status})`);
+      throw new Error(`${provider} failed (${upstream.status})`);
+    }
+    const contentLength = Number(upstream.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+      throw new Error(`${provider} response was too large`);
+    }
+    if (!upstream.body) {
+      throw new Error(`${provider} returned an empty response`);
     }
 
-    return (await upstream.json()) as T;
+    const reader = upstream.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      received += value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel();
+        throw new Error(`${provider} response was too large`);
+      }
+      chunks.push(value);
+    }
+
+    const body = Buffer.concat(chunks, received).toString("utf8");
+    return JSON.parse(body) as T;
   } finally {
     clearTimeout(timeout);
   }
@@ -609,6 +614,7 @@ async function routeWithValhalla(
   shapingPoints: RoutePoint[],
   preferences: RoutePreferences,
   notes: string[],
+  timeoutMs: number,
 ): Promise<OsrmResponse> {
   const useHighways = preferences.pureBackroads
     ? 0
@@ -656,21 +662,20 @@ async function routeWithValhalla(
     },
   };
 
-  const upstream = await fetch("https://valhalla1.openstreetmap.de/route", {
-    method: "POST",
-    headers: {
-      "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
-      Accept: "application/json",
-      "Content-Type": "application/json",
+  const payload = await fetchJsonWithTimeout<ValhallaResponse>(
+    "https://valhalla1.openstreetmap.de/route",
+    {
+      method: "POST",
+      headers: {
+        "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
-
-  if (!upstream.ok) {
-    throw new Error(`Valhalla failed (${upstream.status})`);
-  }
-
-  const payload = (await upstream.json()) as ValhallaResponse;
+    timeoutMs,
+    "Valhalla",
+  );
   if (!payload.trip?.legs?.length) {
     throw new Error(payload.trip?.status_message ?? "Valhalla returned no route");
   }
@@ -814,6 +819,7 @@ async function routeWithOsrm(
   shapingPoints: RoutePoint[],
   preferences: RoutePreferences,
   notes: string[],
+  timeoutMs: number,
 ): Promise<OsrmResponse> {
   const routePoints = [
     { lat: originLat, lon: originLng },
@@ -843,51 +849,95 @@ async function routeWithOsrm(
     );
   }
 
-  let upstream = await fetch(url, {
+  const init = {
     headers: {
       "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
       Accept: "application/json",
     },
-  });
-
-  if (!upstream.ok && preferences.avoidHighways) {
+  };
+  let payload: OsrmResponse;
+  try {
+    payload = await fetchJsonWithTimeout<OsrmResponse>(url, init, timeoutMs, "OSRM");
+  } catch (error) {
+    if (!preferences.avoidHighways) {
+      throw error;
+    }
     notes.push(
       "OSRM motorway exclusion was not accepted, so scoring fallback was used.",
     );
     url.searchParams.delete("exclude");
-    upstream = await fetch(url, {
-      headers: {
-        "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
-        Accept: "application/json",
-      },
-    });
+    payload = await fetchJsonWithTimeout<OsrmResponse>(url, init, timeoutMs, "OSRM");
   }
-
-  if (!upstream.ok) {
-    throw new Error(`OSRM failed (${upstream.status})`);
-  }
-
-  const payload = (await upstream.json()) as OsrmResponse;
   return selectPreferredRoute(payload, preferences, notes);
 }
 
 export function createApp(options: CreateAppOptions = {}) {
   const config = options.config ?? loadConfig();
+  if (config.environment === "production" && !config.corsOrigins?.length) {
+    throw new Error("production API configuration requires explicit CORS origins");
+  }
   const db = options.db ?? openDatabase(config.databasePath);
   const app = express();
-  const searchCache = new ExpiringLruCache<SearchPayload>(128, searchCacheTtlMs);
+  const searchCache = new ExpiringLruCache<SearchPayload>(
+    config.searchCacheEntries ?? 512,
+    config.searchCacheTtlMs ?? 5 * 60_000,
+    config.searchCacheMaxBytes ?? 16 * 1024 * 1024,
+  );
   const searchInFlight = new Map<string, Promise<SearchPayload>>();
-  const routeCache = new ExpiringLruCache<OsrmResponse>(64, routeCacheTtlMs);
+  const routeCache = new ExpiringLruCache<OsrmResponse>(
+    config.routeCacheEntries ?? 256,
+    config.routeCacheTtlMs ?? 10 * 60_000,
+    config.routeCacheMaxBytes ?? 64 * 1024 * 1024,
+  );
   const routeInFlight = new Map<string, Promise<OsrmResponse>>();
+  const sessionCache = new ExpiringLruCache<SessionRecord>(
+    10_000,
+    config.sessionCacheTtlMs ?? 30_000,
+  );
+  const globalLimiter = new MemoryTokenBucket(
+    config.globalRateLimit ?? { maximum: 300, windowMs: 60_000 },
+  );
+  const authLimiter = new MemoryTokenBucket(
+    config.authRateLimit ?? { maximum: 10, windowMs: 15 * 60_000 },
+  );
+  const integrationLimiter = new MemoryTokenBucket(
+    config.integrationRateLimit ?? { maximum: 90, windowMs: 60_000 },
+  );
+  const loginAccountLimiter = new MemoryTokenBucket(
+    config.authRateLimit ?? { maximum: 10, windowMs: 15 * 60_000 },
+  );
+  const upstreamGate = new ConcurrencyGate(
+    config.upstreamConcurrency ?? 32,
+    config.upstreamQueueSize ?? 64,
+  );
+  const findSession = db.prepare(`
+    SELECT user_id, audit_key_envelope, expires_at
+    FROM sessions
+    WHERE token_hash = ?
+  `);
+  let nextSessionCleanupAt = Date.now() + 60 * 60_000;
 
   if (config.trustProxy) {
     app.set("trust proxy", 1);
   }
 
-  app.use(helmet());
+  app.disable("x-powered-by");
+  app.use(
+    helmet({
+      crossOriginResourcePolicy: false,
+    }),
+  );
+  app.use((req, res, next) => {
+    res.setHeader("X-Request-ID", randomUUID());
+    res.setHeader("Cache-Control", "no-store");
+    next();
+  });
   app.use(
     cors({
-      credentials: true,
+      credentials: false,
+      maxAge: 600,
+      methods: ["GET", "POST", "PUT", "OPTIONS"],
+      allowedHeaders: ["Authorization", "Content-Type"],
       origin(origin, callback) {
         if (
           !origin ||
@@ -897,11 +947,32 @@ export function createApp(options: CreateAppOptions = {}) {
           callback(null, true);
           return;
         }
-        callback(null, false);
+        callback(new CorsOriginError("origin is not allowed"));
       },
     }),
   );
-  app.use(express.json({ limit: "1mb" }));
+  app.use(
+    rateLimit(
+      globalLimiter,
+      (req) => `global:${getIp(req)}`,
+      (req) => req.path === "/health",
+    ),
+  );
+  app.use(
+    "/auth",
+    rateLimit(authLimiter, (req) => `auth:${getIp(req)}`),
+  );
+  app.use(
+    "/integrations",
+    rateLimit(integrationLimiter, (req) => `integrations:${getIp(req)}`),
+  );
+  app.use(
+    express.json({
+      limit: config.bodyLimitBytes ?? 512 * 1024,
+      strict: true,
+      type: "application/json",
+    }),
+  );
 
   function audit(
     req: AuthedRequest,
@@ -946,32 +1017,48 @@ export function createApp(options: CreateAppOptions = {}) {
     }
 
     const tokenHash = hashToken(token);
-    const session = db
-      .prepare(
-        `
-      SELECT user_id, audit_key_envelope, expires_at
-      FROM sessions
-      WHERE token_hash = ?
-    `,
-      )
-      .get(tokenHash) as
-      | {
-          user_id: string;
-          audit_key_envelope: string | null;
-          expires_at: string;
-        }
-      | undefined;
+    let session = sessionCache.get(tokenHash);
+    if (!session) {
+      session = findSession.get(tokenHash) as SessionRecord | undefined;
+      if (session) {
+        const remainingSessionMs = new Date(session.expires_at).getTime() - Date.now();
+        sessionCache.set(
+          tokenHash,
+          session,
+          Math.min(config.sessionCacheTtlMs ?? 30_000, remainingSessionMs),
+        );
+      }
+    }
 
     if (!session || new Date(session.expires_at).getTime() <= Date.now()) {
+      sessionCache.delete(tokenHash);
       res.status(401).json({ error: "invalid or expired session" });
       return;
+    }
+
+    if (Date.now() >= nextSessionCleanupAt) {
+      db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowIso());
+      db.prepare("DELETE FROM audit_logs WHERE created_at <= ?").run(
+        new Date(
+          Date.now() - (config.auditRetentionDays ?? 90) * 24 * 60 * 60_000,
+        ).toISOString(),
+      );
+      nextSessionCleanupAt = Date.now() + 60 * 60_000;
     }
 
     req.auth = {
       userId: session.user_id,
       tokenHash,
-      auditKey: unwrapAuditKey(session.audit_key_envelope, config.serverSecret),
+      auditKey: null,
     };
+    try {
+      req.auth.auditKey = unwrapAuditKey(
+        session.audit_key_envelope,
+        config.serverSecret,
+      );
+    } catch {
+      req.auth.auditKey = null;
+    }
     next();
   }
 
@@ -986,6 +1073,10 @@ export function createApp(options: CreateAppOptions = {}) {
         res.json({ results: [] });
         return;
       }
+      if (q.length > 160 || containsControlCharacter(q)) {
+        res.status(400).json({ error: "search query is invalid" });
+        return;
+      }
 
       const centerLat = optionalNumberQuery(req.query.centerLat);
       const centerLng = optionalNumberQuery(req.query.centerLng);
@@ -995,6 +1086,22 @@ export function createApp(options: CreateAppOptions = {}) {
       const west = optionalNumberQuery(req.query.west);
       const hasBounds = [north, south, east, west].every((value) => value !== null);
       const hasCenter = centerLat !== null && centerLng !== null;
+      const anyCenter = centerLat !== null || centerLng !== null;
+      const anyBounds = [north, south, east, west].some((value) => value !== null);
+      if (
+        (anyCenter &&
+          (!hasCenter || !validLatitude(centerLat) || !validLongitude(centerLng))) ||
+        (anyBounds &&
+          (!hasBounds ||
+            !validLatitude(north) ||
+            !validLatitude(south) ||
+            !validLongitude(east) ||
+            !validLongitude(west) ||
+            north! < south!))
+      ) {
+        res.status(400).json({ error: "search coordinates are invalid" });
+        return;
+      }
       const cacheKey = JSON.stringify({
         q: q.toLowerCase(),
         centerLat: centerLat?.toFixed(2),
@@ -1007,14 +1114,14 @@ export function createApp(options: CreateAppOptions = {}) {
       const cached = searchCache.get(cacheKey);
       if (cached) {
         res.setHeader("X-Twistaway-Search-Cache", "hit");
-        res.json(cached);
+        await sendOptimizedJson(req, res, cached, 60);
         return;
       }
 
       const pending = searchInFlight.get(cacheKey);
       if (pending) {
         res.setHeader("X-Twistaway-Search-Cache", "pending");
-        res.json(await pending);
+        await sendOptimizedJson(req, res, await pending, 60);
         return;
       }
 
@@ -1036,10 +1143,14 @@ export function createApp(options: CreateAppOptions = {}) {
         }>(
           url,
           {
-            "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
-            Accept: "application/json",
+            headers: {
+              "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
+              Accept: "application/json",
+            },
           },
-          1500,
+          Math.min(config.upstreamTimeoutMs ?? 8_000, 1_500),
+          "Photon",
+          2 * 1024 * 1024,
         );
 
         return (payload.features ?? []).map((feature) => {
@@ -1080,10 +1191,14 @@ export function createApp(options: CreateAppOptions = {}) {
         return await fetchJsonWithTimeout<Array<Record<string, unknown>>>(
           url,
           {
-            "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
-            Accept: "application/json",
+            headers: {
+              "User-Agent": "Twistaway/0.1 (development contact: twistaway.local)",
+              Accept: "application/json",
+            },
           },
-          bounded ? 2200 : 2800,
+          Math.min(config.upstreamTimeoutMs ?? 8_000, bounded ? 2_200 : 2_800),
+          "Nominatim",
+          2 * 1024 * 1024,
         );
       }
 
@@ -1179,7 +1294,7 @@ export function createApp(options: CreateAppOptions = {}) {
         return outsidePenalty + distanceScore - relevanceBonus;
       }
 
-      const request = resolveSearch();
+      const request = upstreamGate.run(resolveSearch);
       searchInFlight.set(cacheKey, request);
       let payload: SearchPayload;
       try {
@@ -1187,9 +1302,14 @@ export function createApp(options: CreateAppOptions = {}) {
       } finally {
         searchInFlight.delete(cacheKey);
       }
-      searchCache.set(cacheKey, payload);
+      searchCache.set(
+        cacheKey,
+        payload,
+        config.searchCacheTtlMs ?? 5 * 60_000,
+        Buffer.byteLength(JSON.stringify(payload)),
+      );
       res.setHeader("X-Twistaway-Search-Cache", "miss");
-      res.json(payload);
+      await sendOptimizedJson(req, res, payload, 60);
     } catch (error) {
       next(error);
     }
@@ -1203,12 +1323,22 @@ export function createApp(options: CreateAppOptions = {}) {
       const destinationLng = Number(req.query.destinationLng);
 
       if (
-        ![originLat, originLng, destinationLat, destinationLng].every(Number.isFinite)
+        !validLatitude(originLat) ||
+        !validLongitude(originLng) ||
+        !validLatitude(destinationLat) ||
+        !validLongitude(destinationLng)
       ) {
         res.status(400).json({
           error:
             "originLat, originLng, destinationLat, and destinationLng are required",
         });
+        return;
+      }
+      if (
+        typeof req.query.shapingPoints === "string" &&
+        req.query.shapingPoints.length > 512
+      ) {
+        res.status(400).json({ error: "too many route shaping points" });
         return;
       }
 
@@ -1228,18 +1358,18 @@ export function createApp(options: CreateAppOptions = {}) {
       const cached = routeCache.get(cacheKey);
       if (cached) {
         res.setHeader("X-Twistaway-Route-Cache", "hit");
-        res.json(cached);
+        await sendOptimizedJson(req, res, cached, 120);
         return;
       }
 
       const pending = routeInFlight.get(cacheKey);
       if (pending) {
         res.setHeader("X-Twistaway-Route-Cache", "pending");
-        res.json(await pending);
+        await sendOptimizedJson(req, res, await pending, 120);
         return;
       }
 
-      const routeRequest = (async (): Promise<OsrmResponse> => {
+      const routeRequest = upstreamGate.run(async (): Promise<OsrmResponse> => {
         const plannerNotes: string[] = [];
         const shapingPoints = effectiveShapingPoints(
           origin,
@@ -1260,6 +1390,7 @@ export function createApp(options: CreateAppOptions = {}) {
             shapingPoints,
             preferences,
             plannerNotes,
+            config.upstreamTimeoutMs ?? 8_000,
           );
           if (automaticShapingApplied) {
             try {
@@ -1272,6 +1403,7 @@ export function createApp(options: CreateAppOptions = {}) {
                 requestedShapingPoints,
                 preferences,
                 guardNotes,
+                config.upstreamTimeoutMs ?? 8_000,
               );
               const selectedRoute = selected.routes?.[0];
               const guardedRoute = guarded.routes?.[0];
@@ -1304,6 +1436,7 @@ export function createApp(options: CreateAppOptions = {}) {
             shapingPoints,
             preferences,
             plannerNotes,
+            config.upstreamTimeoutMs ?? 8_000,
           );
         }
 
@@ -1314,7 +1447,7 @@ export function createApp(options: CreateAppOptions = {}) {
             notes: plannerNotes,
           },
         };
-      })();
+      });
       routeInFlight.set(cacheKey, routeRequest);
       let payload: OsrmResponse;
       try {
@@ -1322,9 +1455,14 @@ export function createApp(options: CreateAppOptions = {}) {
       } finally {
         routeInFlight.delete(cacheKey);
       }
-      routeCache.set(cacheKey, payload);
+      routeCache.set(
+        cacheKey,
+        payload,
+        config.routeCacheTtlMs ?? 10 * 60_000,
+        Buffer.byteLength(JSON.stringify(payload)),
+      );
       res.setHeader("X-Twistaway-Route-Cache", "miss");
-      res.json(payload);
+      await sendOptimizedJson(req, res, payload, 120);
     } catch (error) {
       next(error);
     }
@@ -1352,43 +1490,43 @@ export function createApp(options: CreateAppOptions = {}) {
         ? wrapAuditKey(body.auditKey, config.serverSecret)
         : null;
       const createdAt = nowIso();
+      const passwordHash = await hashPassword(body.password);
+      const tokenHash = hashToken(token);
+      const expiresAt = expiresInDays(config.sessionDays);
 
-      db.prepare(
-        `
-        INSERT INTO users (id, username, email, password_hash, kdf_salt, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `,
-      ).run(
-        userId,
-        body.username,
-        body.email.toLowerCase(),
-        await hashPassword(body.password),
-        randomBytes(32).toString("base64"),
-        createdAt,
-      );
-
-      const user = db
-        .prepare("SELECT kdf_salt FROM users WHERE id = ?")
-        .get(userId) as { kdf_salt: string };
-      db.prepare(
-        `
-        INSERT INTO sessions (token_hash, user_id, audit_key_envelope, expires_at, created_at)
-        VALUES (?, ?, ?, ?, ?)
-      `,
-      ).run(
-        hashToken(token),
-        userId,
-        auditEnvelope ? JSON.stringify(auditEnvelope) : null,
-        expiresInDays(config.sessionDays),
-        createdAt,
-      );
+      const kdfSalt = randomBytes(32).toString("base64");
+      const auditEnvelopeJson = auditEnvelope ? JSON.stringify(auditEnvelope) : null;
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        db.prepare(
+          `
+          INSERT INTO users (id, username, email, password_hash, kdf_salt, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `,
+        ).run(userId, body.username, body.email, passwordHash, kdfSalt, createdAt);
+        db.prepare(
+          `
+          INSERT INTO sessions (token_hash, user_id, audit_key_envelope, expires_at, created_at)
+          VALUES (?, ?, ?, ?, ?)
+        `,
+        ).run(tokenHash, userId, auditEnvelopeJson, expiresAt, createdAt);
+        db.exec("COMMIT");
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
+      sessionCache.set(tokenHash, {
+        user_id: userId,
+        audit_key_envelope: auditEnvelopeJson,
+        expires_at: expiresAt,
+      });
 
       res.status(201).json({
         userId,
         username: body.username,
-        email: body.email.toLowerCase(),
+        email: body.email,
         token,
-        kdfSalt: user.kdf_salt,
+        kdfSalt,
         auditKeyAttached: Boolean(auditEnvelope),
       });
     } catch (error) {
@@ -1399,6 +1537,14 @@ export function createApp(options: CreateAppOptions = {}) {
   app.post("/auth/login", async (req, res, next) => {
     try {
       const body = loginSchema.parse(req.body);
+      const accountLimit = loginAccountLimiter.consume(
+        `login:${body.identifier.toLowerCase()}`,
+      );
+      if (!accountLimit.allowed) {
+        res.setHeader("Retry-After", accountLimit.retryAfterSeconds);
+        res.status(429).json({ error: "too many requests; try again later" });
+        return;
+      }
       const user = db
         .prepare(
           `
@@ -1417,7 +1563,9 @@ export function createApp(options: CreateAppOptions = {}) {
           }
         | undefined;
 
-      if (!user || !(await verifyPassword(user.password_hash, body.password))) {
+      const passwordHash = user?.password_hash ?? (await dummyPasswordHashPromise);
+      const passwordMatches = await verifyPassword(passwordHash, body.password);
+      if (!user || !passwordMatches) {
         res.status(401).json({ error: "invalid credentials" });
         return;
       }
@@ -1426,18 +1574,20 @@ export function createApp(options: CreateAppOptions = {}) {
       const auditEnvelope = body.auditKey
         ? wrapAuditKey(body.auditKey, config.serverSecret)
         : null;
+      const tokenHash = hashToken(token);
+      const expiresAt = expiresInDays(config.sessionDays);
+      const auditEnvelopeJson = auditEnvelope ? JSON.stringify(auditEnvelope) : null;
       db.prepare(
         `
         INSERT INTO sessions (token_hash, user_id, audit_key_envelope, expires_at, created_at)
         VALUES (?, ?, ?, ?, ?)
       `,
-      ).run(
-        hashToken(token),
-        user.id,
-        auditEnvelope ? JSON.stringify(auditEnvelope) : null,
-        expiresInDays(config.sessionDays),
-        nowIso(),
-      );
+      ).run(tokenHash, user.id, auditEnvelopeJson, expiresAt, nowIso());
+      sessionCache.set(tokenHash, {
+        user_id: user.id,
+        audit_key_envelope: auditEnvelopeJson,
+        expires_at: expiresAt,
+      });
 
       res.json({
         userId: user.id,
@@ -1455,39 +1605,74 @@ export function createApp(options: CreateAppOptions = {}) {
   app.post("/auth/logout", requireAuth, (req: AuthedRequest, res) => {
     audit(req, "logout");
     db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(req.auth!.tokenHash);
+    sessionCache.delete(req.auth!.tokenHash);
     res.status(204).send();
   });
 
-  app.get("/routes", requireAuth, (req: AuthedRequest, res) => {
-    audit(req, "routes.list");
-    const rows = db
-      .prepare(
-        `
-      SELECT id, name, encrypted_payload, preferences_json, created_at, updated_at
-      FROM routes
-      WHERE user_id = ?
-      ORDER BY updated_at DESC
-    `,
-      )
-      .all(req.auth!.userId) as Array<{
-      id: string;
-      name: string;
-      encrypted_payload: string;
-      preferences_json: string;
-      created_at: string;
-      updated_at: string;
-    }>;
+  app.get("/routes", requireAuth, async (req: AuthedRequest, res, next) => {
+    try {
+      const requestedLimit = Number(req.query.limit ?? 100);
+      const requestedOffset = Number(req.query.offset ?? 0);
+      if (
+        !Number.isSafeInteger(requestedLimit) ||
+        requestedLimit < 1 ||
+        requestedLimit > 200 ||
+        !Number.isSafeInteger(requestedOffset) ||
+        requestedOffset < 0 ||
+        requestedOffset > 1_000_000
+      ) {
+        res.status(400).json({ error: "invalid pagination" });
+        return;
+      }
 
-    res.json({
-      routes: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        encryptedPayload: JSON.parse(row.encrypted_payload) as EncryptedPayload,
-        preferences: JSON.parse(row.preferences_json),
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
-      })),
-    });
+      audit(req, "routes.list", {
+        limit: requestedLimit,
+        offset: requestedOffset,
+      });
+      const rows = db
+        .prepare(
+          `
+        SELECT id, name, encrypted_payload, preferences_json, created_at, updated_at
+        FROM routes
+        WHERE user_id = ?
+        ORDER BY updated_at DESC
+        LIMIT ? OFFSET ?
+      `,
+        )
+        .all(req.auth!.userId, requestedLimit + 1, requestedOffset) as Array<{
+        id: string;
+        name: string;
+        encrypted_payload: string;
+        preferences_json: string;
+        created_at: string;
+        updated_at: string;
+      }>;
+      const hasMore = rows.length > requestedLimit;
+      const page = rows.slice(0, requestedLimit);
+
+      await sendOptimizedJson(
+        req,
+        res,
+        {
+          routes: page.map((row) => ({
+            id: row.id,
+            name: row.name,
+            encryptedPayload: JSON.parse(row.encrypted_payload) as EncryptedPayload,
+            preferences: JSON.parse(row.preferences_json),
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+          })),
+          pagination: {
+            limit: requestedLimit,
+            offset: requestedOffset,
+            hasMore,
+          },
+        },
+        0,
+      );
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.post("/routes", requireAuth, (req: AuthedRequest, res, next) => {
@@ -1539,36 +1724,80 @@ export function createApp(options: CreateAppOptions = {}) {
     }
   });
 
-  app.get("/profile/home-address", requireAuth, (req: AuthedRequest, res) => {
-    audit(req, "profile.home_address.read");
-    const row = db
-      .prepare(
-        `
-      SELECT encrypted_payload, updated_at
-      FROM profile_secrets
-      WHERE user_id = ? AND kind = 'home_address'
-    `,
-      )
-      .get(req.auth!.userId) as
-      { encrypted_payload: string; updated_at: string } | undefined;
+  app.get(
+    "/profile/home-address",
+    requireAuth,
+    async (req: AuthedRequest, res, next) => {
+      try {
+        audit(req, "profile.home_address.read");
+        const row = db
+          .prepare(
+            `
+          SELECT encrypted_payload, updated_at
+          FROM profile_secrets
+          WHERE user_id = ? AND kind = 'home_address'
+        `,
+          )
+          .get(req.auth!.userId) as
+          { encrypted_payload: string; updated_at: string } | undefined;
 
-    if (!row) {
-      res.status(404).json({ error: "home address not set" });
-      return;
-    }
+        if (!row) {
+          res.status(404).json({ error: "home address not set" });
+          return;
+        }
 
-    res.json({
-      encryptedPayload: JSON.parse(row.encrypted_payload) as EncryptedPayload,
-      updatedAt: row.updated_at,
-    });
+        await sendOptimizedJson(
+          req,
+          res,
+          {
+            encryptedPayload: JSON.parse(row.encrypted_payload) as EncryptedPayload,
+            updatedAt: row.updated_at,
+          },
+          0,
+        );
+      } catch (error) {
+        next(error);
+      }
+    },
+  );
+
+  app.use((_req, res) => {
+    res.status(404).json({ error: "not found" });
   });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (error instanceof CorsOriginError) {
+      res.status(403).json({ error: "origin is not allowed" });
+      return;
+    }
+    if (error instanceof ConcurrencyLimitError) {
+      res.setHeader("Retry-After", "1");
+      res.status(503).json({ error: "service is busy; try again shortly" });
+      return;
+    }
     if (error && typeof error === "object" && "issues" in error) {
       res.status(400).json({
         error: "validation failed",
-        issues: (error as { issues: unknown }).issues,
+        issues: (
+          error as { issues: Array<{ message: string; path: PropertyKey[] }> }
+        ).issues.map((issue) => ({
+          message: issue.message,
+          path: issue.path.map(String).join("."),
+        })),
       });
+      return;
+    }
+    if (
+      error &&
+      typeof error === "object" &&
+      "type" in error &&
+      (error as { type?: string }).type === "entity.too.large"
+    ) {
+      res.status(413).json({ error: "request body is too large" });
+      return;
+    }
+    if (error instanceof SyntaxError && "body" in error) {
+      res.status(400).json({ error: "invalid JSON body" });
       return;
     }
 
@@ -1581,7 +1810,24 @@ export function createApp(options: CreateAppOptions = {}) {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const config = loadConfig();
-  createApp({ config }).listen(config.port, () => {
+  const db = openDatabase(config.databasePath);
+  const server = createApp({ config, db }).listen(config.port, () => {
     console.log(`Twistaway API listening on http://localhost:${config.port}`);
   });
+  server.headersTimeout = 10_000;
+  server.requestTimeout = 30_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 1_000;
+
+  function shutdown(signal: string): void {
+    console.log(`Twistaway API received ${signal}; shutting down`);
+    server.close(() => {
+      db.close();
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(1), 10_000).unref();
+  }
+
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
