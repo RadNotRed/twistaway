@@ -9,10 +9,10 @@
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^6.0.1",
-    "vite": "^8.0.12"
+    "@vitejs/plugin-react": "^6.0.3",
+    "vite": "^8.1.5"
   },
   "devDependencies": {
-    "typescript": "^6.0.3"
+    "typescript": "^7.0.2"
   }
 }
