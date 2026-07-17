@@ -65,20 +65,23 @@ The Flutter development app opens at `http://127.0.0.1:8080`.
 
 Everything developers use regularly is routed through Bun from the repository root:
 
-| Command                 | What it does                                       |
-| ----------------------- | -------------------------------------------------- |
-| `bun run dev:web`       | Run the Flutter app in a browser                   |
-| `bun run dev:android`   | Start the configured emulator and run Flutter      |
-| `bun run dev:api`       | Run the Express API with reload                    |
-| `bun run dev:site`      | Run the Vite marketing/legal site                  |
-| `bun run build`         | Build shared TypeScript, API, and website packages |
-| `bun run build:android` | Create `artifacts/twistaway-release.apk`           |
-| `bun run build:web`     | Create the Flutter bundle in `artifacts/web/`      |
-| `bun run build:ios`     | Create an IPA on macOS                             |
-| `bun run build:all`     | Build the workspace and all available app targets  |
-| `bun run check`         | Format-check, build, and test the workspace        |
-| `bun run check:flutter` | Format-check, analyze, and test Flutter            |
-| `bun run check:all`     | Validate workspace, Flutter, docs, and Docker      |
+| Command                      | What it does                                       |
+| ---------------------------- | -------------------------------------------------- |
+| `bun run dev:web`            | Run the Flutter app in a browser                   |
+| `bun run dev:android`        | Start the configured emulator and run Flutter      |
+| `bun run dev:android:device` | Run on an authorized USB Android device            |
+| `bun run dev:api`            | Run the Express API with reload                    |
+| `bun run dev:site`           | Run the Vite marketing/legal site                  |
+| `bun run build`              | Build shared TypeScript, API, and website packages |
+| `bun run build:android`      | Create `artifacts/twistaway-release.apk`           |
+| `bun run build:web`          | Create the Flutter bundle in `artifacts/web/`      |
+| `bun run build:ios`          | Create an IPA on macOS                             |
+| `bun run build:all`          | Build the workspace and all available app targets  |
+| `bun run check`              | Format-check, build, and test the workspace        |
+| `bun run check:flutter`      | Format-check, analyze, and test Flutter            |
+| `bun run check:all`          | Validate workspace, Flutter, docs, and Docker      |
+| `bun run clean`              | Remove generated build output                      |
+| `bun run clean:all`          | Also remove local dependency and tool caches       |
 
 See the complete [command reference](docs/development/commands.md).
 
@@ -88,8 +91,8 @@ See the complete [command reference](docs/development/commands.md).
 twistaway/
 ├── apps/
 │   ├── api/          # Express, SQLite, provider proxy, encrypted accounts
-│   ├── mobile/       # Flutter app for Android, iOS, Windows, and web
-│   └── web/          # Vite marketing and legal site
+│   ├── mobile/       # Flutter app for Android, iOS, and web
+│   └── site/         # Vite marketing and legal site
 ├── packages/shared/  # Shared TypeScript contracts
 ├── docs/             # MkDocs, architecture, deployment, and legal material
 ├── scripts/          # Bun-routed build, development, Docker, and emulator tools
@@ -115,7 +118,7 @@ Recommended hostnames:
 - `https://api.twistaway.app` — Dockerized API
 - `https://docs.twistaway.app` — MkDocs documentation
 
-Read the full [Docker and Cloudflare guide](docs/docker-deployment.md) before exposing a
+Read the full [Docker and Cloudflare guide](docs/deployment/docker.md) before exposing a
 deployment.
 
 ## 📚 Documentation

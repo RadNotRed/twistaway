@@ -6,7 +6,7 @@ WORKDIR /app
 
 COPY package.json bun.lock ./
 COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
+COPY apps/site/package.json apps/site/package.json
 COPY packages/shared/package.json packages/shared/package.json
 
 RUN bun install --frozen-lockfile
@@ -18,7 +18,7 @@ COPY packages/shared/tsconfig.json packages/shared/tsconfig.json
 
 RUN bun run --filter @twistaway/shared build \
     && bun run --filter @twistaway/api build \
-    && rm -rf node_modules apps/api/node_modules apps/web/node_modules packages/shared/node_modules \
+    && rm -rf node_modules apps/api/node_modules apps/site/node_modules packages/shared/node_modules \
     && bun install --frozen-lockfile --production --filter @twistaway/api
 
 FROM node:25-bookworm-slim AS runtime

@@ -29,7 +29,7 @@ jobs:
         uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
           cache: gradle
 
       - name: Set up Flutter
@@ -92,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: twistaway-website-${{ github.sha }}
-          path: apps/web/dist
+          path: apps/site/dist
           if-no-files-found: error
           retention-days: 14
 

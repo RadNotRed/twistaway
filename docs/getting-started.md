@@ -68,4 +68,4 @@ mobile application.
 
 - Learn the [Bun command surface](development/commands.md).
 - Review the [architecture](architecture/overview.md).
-- Start a local API with [Docker](docker-deployment.md).
+- Start a local API with [Docker](deployment/docker.md).

@@ -68,6 +68,42 @@ void main() {
     service.close();
   });
 
+  test('API place search ranks nearby results before distant ones', () async {
+    final service = PlaceSearchService(
+      client: MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'results': [
+              {
+                'name': 'Far place',
+                'latitude': 41.7,
+                'longitude': -74.5,
+              },
+              {
+                'name': 'Nearby place',
+                'latitude': 40.701,
+                'longitude': -73.501,
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+      apiBaseUrl: 'https://api.test',
+      connectionMode: ServiceConnectionMode.apiOnly,
+    );
+
+    final results = await service.search(
+      'place',
+      context: const SearchContext(center: LatLng(40.7, -73.5)),
+    );
+
+    expect(results.map((result) => result.name), ['Nearby place', 'Far place']);
+    expect(
+        results.first.distanceMeters, lessThan(results.last.distanceMeters!));
+    service.close();
+  });
+
   test('routing reuses an identical planned route', () async {
     var requests = 0;
     Uri? requestedUri;

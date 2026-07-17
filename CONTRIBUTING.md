@@ -23,6 +23,7 @@ bun run dev:web       # Flutter app in a browser
 bun run dev:api       # Express API with reload
 bun run dev:site      # Marketing/legal website
 bun run dev:android   # Emulator plus Flutter app
+bun run dev:android:device  # Connected USB Android device plus Flutter logs
 ```
 
 ## Quality checks

@@ -88,7 +88,7 @@ app.innerHTML = `
       <ul class="security-list">
         <li>Argon2id password hashing with per-password salts.</li>
         <li>AES-256-GCM payload envelopes for routes, home address, and account-linked logs.</li>
-        <li>SQLite backend and SQLCipher-ready mobile storage for offline use.</li>
+        <li>SQLite backend and encrypted mobile storage for offline use.</li>
         <li>Usernames and emails remain searchable account fields by design.</li>
       </ul>
     </section>

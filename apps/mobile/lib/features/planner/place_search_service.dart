@@ -177,8 +177,9 @@ class PlaceSearchService {
         distanceMeters: (value['distanceMeters'] as num?)?.toDouble(),
       );
     }).toList(growable: false);
-    _cache.put(cacheKey, places);
-    return places;
+    final ranked = _rankNearby(places, queryParameters);
+    _cache.put(cacheKey, ranked);
+    return ranked;
   }
 
   Future<List<PlaceResult>> _fetchPhotonPlaces(
@@ -243,6 +244,29 @@ class PlaceSearchService {
     final limited = places.take(6).toList(growable: false);
     _cache.put(cacheKey, limited);
     return limited;
+  }
+
+  List<PlaceResult> _rankNearby(
+    List<PlaceResult> places,
+    Map<String, String> queryParameters,
+  ) {
+    final centerLat = double.tryParse(queryParameters['centerLat'] ?? '');
+    final centerLng = double.tryParse(queryParameters['centerLng'] ?? '');
+    if (centerLat == null || centerLng == null) return places;
+
+    final center = LatLng(centerLat, centerLng);
+    final distance = const Distance();
+    final ranked = places.map((place) {
+      return PlaceResult(
+        name: place.name,
+        latLng: place.latLng,
+        type: place.type,
+        distanceMeters: place.distanceMeters ??
+            distance.as(LengthUnit.Meter, center, place.latLng),
+      );
+    }).toList(growable: false)
+      ..sort((a, b) => a.distanceMeters!.compareTo(b.distanceMeters!));
+    return ranked;
   }
 
   String _photonDisplayName(Map<String, dynamic> properties) {

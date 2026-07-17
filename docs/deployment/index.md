@@ -10,5 +10,5 @@ For development and an early beta, the API can run on a home server behind Cloud
 Tunnel. The same Compose stack moves to Hetzner or another Docker host without changing
 the public API hostname.
 
-Start with [Docker and Cloudflare](../docker-deployment.md), then review the
-[hosting tradeoffs](../api-hosting.md).
+Start with [Docker and Cloudflare](docker.md), then review the
+[hosting tradeoffs](hosting.md).

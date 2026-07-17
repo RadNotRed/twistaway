@@ -16,7 +16,6 @@ body:
         - Android
         - iOS
         - Flutter web
-        - Windows
         - API
         - Website or documentation
     validations:

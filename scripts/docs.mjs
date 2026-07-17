@@ -33,7 +33,7 @@ async function ensureEnvironment() {
       "pip",
       "install",
       "--requirement",
-      "requirements-docs.txt",
+      "docs/requirements.txt",
     ]);
   }
 }
@@ -48,7 +48,7 @@ switch (action) {
       "install",
       "--upgrade",
       "--requirement",
-      "requirements-docs.txt",
+      "docs/requirements.txt",
     ]);
     break;
   case "serve":

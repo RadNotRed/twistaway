@@ -62,8 +62,8 @@ nav:
       - Security model: architecture/security.md
   - Deployment:
       - Overview: deployment/index.md
-      - Docker and Cloudflare: docker-deployment.md
-      - API hosting: api-hosting.md
+      - Docker and Cloudflare: deployment/docker.md
+      - API hosting: deployment/hosting.md
   - Legal:
       - Privacy policy: legal/privacy-policy.md
       - Terms of service: legal/terms-of-service.md

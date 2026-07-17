@@ -15,7 +15,7 @@ integrations rather than single points of failure.
 - 🎵 Spotify controls designed to stay out of the navigation path
 - 🔐 Encrypted account and route-storage architecture
 - 🐳 Portable Docker API deployment for home servers or cloud VMs
-- 📱 Android, iOS, Windows, and web-capable Flutter project
+- 📱 Android, iOS, and web-capable Flutter project
 
 ## 🚀 Start developing
 
@@ -26,7 +26,7 @@ bun run dev:web
 
 Continue with [Getting started](getting-started.md), explore the
 [command reference](development/commands.md), or deploy the API with
-[Docker and Cloudflare](docker-deployment.md).
+[Docker and Cloudflare](deployment/docker.md).
 
 !!! warning "Pre-release software"
 

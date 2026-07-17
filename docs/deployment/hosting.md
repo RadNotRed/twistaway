@@ -31,9 +31,9 @@ Suggested layout:
 6. Keep map tiles direct from the tile provider. Do not proxy tile traffic through the
    Twistaway API unless licensing or authentication requires it.
 
-The repository's [Docker deployment](docker-deployment.md) implements this layout and
-can run unchanged on a home server first, then move to Hetzner while keeping
-`api.twistaway.app` stable through Cloudflare Tunnel.
+The repository's [Docker deployment](docker.md) implements this layout and can run
+unchanged on a home server first, then move to Hetzner while keeping `api.twistaway.app`
+stable through Cloudflare Tunnel.
 
 ## Alternatives
 

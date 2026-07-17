@@ -1,8 +1,8 @@
 # 📱 Twistaway Flutter app
 
-The primary Twistaway client targets Android, iOS, Windows, and web from one Flutter
-project. Run supported commands from the **repository root** through Bun so local
-development and CI use the same entry points.
+The primary Twistaway client targets Android, iOS, and web from one Flutter project. Run
+supported commands from the **repository root** through Bun so local development and CI
+use the same entry points.
 
 ## 🚀 Development
 
@@ -17,7 +17,12 @@ Other targets:
 ```bash
 bun run dev:mobile   # Select an attached Flutter device
 bun run dev:android  # Start the configured emulator and launch the app
+bun run dev:android:device  # Launch on an authorized USB Android device
 ```
+
+Keep this command running to see Flutter logs and use hot reload (`r`) or hot restart
+(`R`). If multiple physical devices are connected, select one with
+`ANDROID_SERIAL=<device-id> bun run dev:android:device`.
 
 VS Code includes launch configurations for the configured Android emulator and the
 currently selected device. JetBrains run configurations expose the same emulator/build

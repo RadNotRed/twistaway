@@ -33,6 +33,7 @@ storing the user's raw password.
 
 ## Offline Mode
 
-The mobile app should use SQLCipher-backed SQLite locally. The local database password
-should be derived from the vault key and protected by the OS secure storage where
-possible. Offline route packs should be encrypted with the same vault hierarchy.
+The current mobile client stores sensitive preferences and saved routes through the
+operating system's secure storage. If a local SQLite route database is introduced, add
+database encryption at that point rather than shipping an unused native database
+dependency today. Offline route packs should use the same encrypted-storage boundary.

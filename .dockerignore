@@ -16,7 +16,7 @@ backups
 data
 docs
 scripts
-site
+/site
 .env
 .env.*
 *.db

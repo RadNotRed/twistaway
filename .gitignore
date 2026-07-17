@@ -13,7 +13,7 @@ coverage/
 artifacts/
 backups/
 data/
-site/
+/site/
 .dart_tool/
 build/
 .flutter-plugins

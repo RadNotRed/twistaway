@@ -14,9 +14,9 @@ when it or a third-party provider is unavailable.
 
 | Path                | Purpose                                                         |
 | ------------------- | --------------------------------------------------------------- |
-| `apps/mobile`       | Flutter Android, iOS, Windows, and web application              |
+| `apps/mobile`       | Flutter Android, iOS, and web application                       |
 | `apps/api`          | Express API, SQLite persistence, provider proxy, authentication |
-| `apps/web`          | Vite marketing and legal site                                   |
+| `apps/site`         | Vite marketing and legal site                                   |
 | `packages/shared`   | Shared TypeScript contracts                                     |
 | `docs`              | MkDocs content and detailed legal/architecture notes            |
 | `scripts`           | Bun, Flutter, Docker, and emulator automation                   |
