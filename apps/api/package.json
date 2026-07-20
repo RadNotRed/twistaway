@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@twistaway/shared": "0.1.0",
-    "argon2": "^0.44.0",
+    "argon2": "^0.45.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "helmet": "^8.3.0",
