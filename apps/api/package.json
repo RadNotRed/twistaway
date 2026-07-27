@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@twistaway/shared": "0.1.0",
-    "argon2": "^0.45.0",
+    "argon2": "^0.45.1",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "helmet": "^8.3.0",
@@ -21,7 +21,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.1.2",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.1.4",
     "tsx": "^4.23.1",
