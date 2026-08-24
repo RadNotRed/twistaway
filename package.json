@@ -56,7 +56,7 @@
     "workflows:check": "bun scripts/workflows-check.mjs"
   },
   "devDependencies": {
-    "oxlint": "1.78.0",
+    "oxlint": "1.79.0",
     "prettier": "3.9.6"
   },
   "engines": {
