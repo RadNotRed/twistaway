@@ -14,14 +14,14 @@
     "@twistaway/shared": "0.1.0",
     "argon2": "^0.45.1",
     "cors": "^2.8.5",
-    "express": "^5.1.0",
+    "express": "^5.3.0",
     "helmet": "^8.3.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.3.1",
     "tsx": "^4.23.15",
